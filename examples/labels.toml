@@ -1,0 +1,18 @@
+# 回とスレッドに人が付ける名前. ID は `tab-lineage outline` の出力から写す.
+#   id        回の ID (開始時刻, 現地時刻で分まで)
+#   title     回の名前 (自動の名前を置き換える)
+#   note      回の説明. 回の画面の見出しの下に出る
+#   featured  true なら概観の画面の上に出す
+#   hide      true ならサイトに載せない
+#   threads   スレッドの ID (根の訪問 ID) = 名前
+
+[[episode]]
+id = "2026-09-15T21:12"
+title = "統計の学び直し"
+note = "区間推定の式を確かめるつもりが, 分布の導出まで遡った."
+featured = true
+threads = { "1234567" = "区間推定", "1234600" = "t 分布の導出" }
+
+[[episode]]
+id = "2026-09-18T02:40"
+hide = true

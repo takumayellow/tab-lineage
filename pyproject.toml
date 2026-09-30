@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tab-lineage"
+dynamic = ["version"]
+description = "Chromium 系ブラウザの履歴から閲覧の系統樹を作り, 1 枚の HTML で見られるようにする"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["browser", "history", "tabs", "vivaldi", "chromium"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+tab-lineage = "tab_lineage.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "tab_lineage.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tab_lineage = ["data/*.toml", "viewer/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

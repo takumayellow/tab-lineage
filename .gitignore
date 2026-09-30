@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# 閲覧履歴そのものと, それから作った出力はコミットしない
+*.db
+*.sqlite
+History
+History-journal
+Session_*
+Tabs_*
+out/
+*.html
+!src/tab_lineage/viewer/index.html

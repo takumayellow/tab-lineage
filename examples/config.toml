@@ -1,0 +1,34 @@
+# tab-lineage の設定の例. 既定値 (src/tab_lineage/data/default.toml) に重ねる.
+# 表 ([privacy.mask] など) は項目ごとに合わさる. 配列 (drop など) は丸ごと置き換わるので, 既定の項目も書き写す.
+
+[site]
+title = "閲覧の系統樹"
+lede = "調べものがどこから脱線したかを, 履歴から木にした."
+
+[episodes]
+gap_minutes = 30
+stale_hours = 12
+
+[threads]
+theta = 0.12
+
+# ワークスペース. 'host/path' の glob に一致した訪問を振り分け, 回とスレッドには多数決で付ける.
+# 上から順に照合する.
+[[workspace]]
+name = "仕事"
+match = ["github.com/my-org/*", "*.atlassian.net/*", "docs.google.com/*"]
+
+[[workspace]]
+name = "大学"
+match = ["*.ac.jp/*", "scholar.google.*/*"]
+
+[[workspace]]
+name = "個人開発"
+match = ["github.com/my-name/*", "pypi.org/*", "docs.python.org/*"]
+
+[privacy.mask]
+# SNS の投稿は題名に本文や人の名前が入るので, 公開するなら伏せる
+"x.com/*" = "X"
+"www.instagram.com/*" = "Instagram"
+# 社内のツール
+"*.atlassian.net/*" = "課題管理"

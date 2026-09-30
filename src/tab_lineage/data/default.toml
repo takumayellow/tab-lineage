@@ -1,0 +1,64 @@
+# tab-lineage の既定設定. --config で渡したファイルの値がこれを上書きする (表は再帰的に合わせる).
+
+[site]
+title = "Tab Lineage"
+
+[episodes]
+gap_minutes = 30        # 無操作がこれだけ続いたら回を区切る
+stale_hours = 12        # これ以上開いていたページに「放置」の印を付ける
+ws_share = 0.25         # 回とスレッドの多数決で, 最多のワークスペースがこの割合に届かなければ未分類にする
+
+[lineage]
+search_window_seconds = 30   # 親の無いリンク訪問を, この秒数以内の検索の子とみなす
+# 検索結果ページ ('host/path' の glob)
+search = [
+  "www.startpage.com/*", "startpage.com/*", "eu.startpage.com/*",
+  "www.google.*/search", "www.bing.com/search", "duckduckgo.com/*",
+  "search.yahoo.co.jp/search*", "search.brave.com/search", "kagi.com/search",
+]
+
+# 同じサイトとみなすパスの深さ. 既定 (0) は host だけ.
+[lineage.fold_depth]
+"github.com" = 2
+"gitlab.com" = 2
+
+[threads]
+theta = 0.12            # この余弦以上なら同じ話題のスレッドにまとめる
+max_lanes = 8           # 1 回に並べるスレッドの上限. 超えた分は「そのほか」
+detour_theta = 0.04     # 部分木とそれ以外の余弦がこれ未満なら寄り道
+
+[privacy]
+keep_query = false      # true にすると URL のクエリも残す (検索語や ID が漏れやすい)
+term_max = 40
+# ログイン・決済の画面は既定で消す. 子は親につなぎ直される.
+drop = [
+  "accounts.google.*/*", "login.*/*", "sso.*/*", "auth.*/*", "signin.*/*",
+  "account.*/*", "accounts.*/*", "id.*/*",
+  "*.auth0.com/*", "login.microsoftonline.com/*", "appleid.apple.com/*",
+  "github.com/login*", "github.com/sessions/*", "github.com/settings/*",
+  "*.paypal.com/*", "checkout.*/*", "pay.*/*",
+  # 検索結果からの中継. 題名は行き先のものが付き, 行き先の URL がクエリに入っている
+  "www.google.*/url", "www.bing.com/ck/*",
+]
+# 中身の無い中継画面 (Cloudflare の確認画面など)
+drop_titles = ['^Just a moment\.\.\.$', '^Attention Required!', '^(新しいタブ|New Tab)$']
+drop_terms = []
+
+# 'host/path' の glob = 表示する名前. 一致したページは題名とパスを伏せ, この名前だけ残す.
+[privacy.mask]
+"mail.google.com/*" = "メール"
+"outlook.live.com/*" = "メール"
+"outlook.office.com/*" = "メール"
+# 地図は店や住所から住んでいる場所が分かるので伏せる
+"www.google.com/maps*" = "地図"
+"www.google.co.jp/maps*" = "地図"
+"maps.google.com/*" = "地図"
+"maps.app.goo.gl/*" = "地図"
+# 個人間のやり取り
+"x.com/messages*" = "X のメッセージ"
+"twitter.com/messages*" = "X のメッセージ"
+"discord.com/channels/*" = "Discord"
+"app.slack.com/*" = "Slack"
+"*.slack.com/*" = "Slack"
+"www.messenger.com/*" = "メッセンジャー"
+"web.whatsapp.com/*" = "WhatsApp"
