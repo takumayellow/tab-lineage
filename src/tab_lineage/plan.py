@@ -14,7 +14,7 @@ from collections import defaultdict
 from .episodes import EpisodeConfig, Timeline, thread_members
 from .histdb import US
 from .lineage import Graph, LineageConfig
-from .privacy import Privacy, clean_url, host_of
+from .privacy import Privacy, clean_url, host_of, scrub_title
 from .session import Tab
 from .text import clean_title
 
@@ -49,7 +49,7 @@ def build(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: Ep
         host = masked[1] if masked else host_of(tab.url)
         # 伏せたタブは lineage と同じく host の URL で節を引く
         url = clean_url(f'{tab.url.split("://", 1)[0]}://{host}/') if masked else clean_url(tab.url, privacy.keep_query)
-        title = masked[0] if masked else (clean_title(tab.title) or host)
+        title = masked[0] if masked else (clean_title(scrub_title(tab.title)) or host)
         key = f'{host}\n{title}' if masked else url
         n = len(rows) + 1
         if key in first_of:

@@ -1,7 +1,7 @@
 import re
 
 from tab_lineage import config, text
-from tab_lineage.privacy import Privacy, clean_url, host_of, site_key
+from tab_lineage.privacy import Privacy, clean_url, host_of, scrub_title, site_key
 
 
 def test_site_key_and_clean_url():
@@ -103,3 +103,10 @@ def test_labels_without_an_id_are_reported(tmp_path):
     labels.write_text('[[episode]]\ntitle = "名前だけ"\n', encoding='utf-8')
     with pytest.raises(ValueError, match='1 番目'):
         config.load_labels(labels)
+
+
+def test_a_url_used_as_the_title_loses_its_query():
+    assert scrub_title('startpage.com/do/search?q=my+secret&segment=x') == 'startpage.com/do/search'
+    assert scrub_title('https://a.example/reset/9f86d081884c7d659a2feaa0c55ad015#t') == 'a.example/reset/…'
+    assert scrub_title('Node.js') == 'Node.js'
+    assert scrub_title('pandas merge | Qiita') == 'pandas merge | Qiita'

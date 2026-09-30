@@ -17,7 +17,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from .histdb import CORE_LINK, SKIP_CORES, US, Visit
-from .privacy import Privacy, clean_url, host_of, site_key
+from .privacy import Privacy, clean_url, host_of, scrub_title, site_key
 from .text import clean_title
 
 MAX_TITLES = 8
@@ -133,7 +133,7 @@ class _Builder:
         src = clean_url(v.url)
         url = clean_url(v.url, self.privacy.keep_query)
         host = host_of(v.url)
-        title = v.title
+        title = scrub_title(v.title)
         term = self.privacy.clean_term(v.term)
         if masked is not None:
             title, host = masked

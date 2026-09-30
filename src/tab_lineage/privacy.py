@@ -92,6 +92,17 @@ def clean_url(url: str, keep_query: bool = False) -> str:
     return f'{s.scheme}:'
 
 
+_URL_TITLE = re.compile(r'(?:https?://)?(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?[/?#]\S*', re.I)
+
+
+def scrub_title(title: str) -> str:
+    """題名の無いページは URL が題名になる. その形の題名はクエリを落としパスを伏せる."""
+    t = title.strip()
+    if not _URL_TITLE.fullmatch(t):
+        return title
+    return clean_url(t if '://' in t else 'https://' + t).split('://', 1)[1]
+
+
 def scrub_path(path: str) -> str:
     return '/'.join('…' if _SECRET_SEGMENT.fullmatch(seg) else seg for seg in path.split('/'))
 
