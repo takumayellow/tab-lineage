@@ -89,12 +89,13 @@ def test_clean_url_scrubs_tokens_and_addresses_in_the_path():
     assert clean_url('https://a.example/reset/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08') == \
         'https://a.example/reset/…'
     assert clean_url('https://a.example/u/someone@example.com/') == 'https://a.example/u/…/'
-    assert clean_url('https://app.box.com/s/ovf9ppujp7thhzttzvmz1grzovgg911x') == 'https://app.box.com/s/…'
+    assert clean_url('https://app.box.com/s/k3f8q2zm7xw1n0pvt5yr9bdh4gc6sj0a') == 'https://app.box.com/s/…'
     assert clean_url('https://shop.example/orders/250930123456789/') == 'https://shop.example/orders/…/'
     # 普通のパスは残す
     assert clean_url('https://github.com/takumayellow/tab-lineage/pull/12') == \
         'https://github.com/takumayellow/tab-lineage/pull/12'
     assert clean_url('https://qiita.com/someone/items/0123abcd4567ef89') == 'https://qiita.com/someone/items/0123abcd4567ef89'
+    assert clean_url('https://a.example/i/abcdefghijklmnopqrstuvw1') == 'https://a.example/i/…'
 
 
 def test_labels_without_an_id_are_reported(tmp_path):
@@ -110,3 +111,9 @@ def test_a_url_used_as_the_title_loses_its_query():
     assert scrub_title('https://a.example/reset/9f86d081884c7d659a2feaa0c55ad015#t') == 'a.example/reset/…'
     assert scrub_title('Node.js') == 'Node.js'
     assert scrub_title('pandas merge | Qiita') == 'pandas merge | Qiita'
+
+
+def test_share_links_are_masked_by_default():
+    p = Privacy.from_config(config.default()['privacy'])
+    assert p.mask_of('https://app.box.com/s/abcdefghijklmnopqrstuvwxyzabcdef') == ('共有リンク', 'box.com')
+    assert p.mask_of('https://www.dropbox.com/scl/fi/xyz/a.pdf') == ('共有リンク', 'www.dropbox.com')

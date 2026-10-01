@@ -54,6 +54,10 @@ drop_terms = []
 "www.google.co.jp/maps*" = "地図"
 "maps.google.com/*" = "地図"
 "maps.app.goo.gl/*" = "地図"
+# 共有リンクは URL を知っていれば中身を開けるので, ID を残さない
+"*.box.com/s/*" = "共有リンク"
+"www.dropbox.com/s/*" = "共有リンク"
+"www.dropbox.com/scl/*" = "共有リンク"
 # 個人間のやり取り
 "x.com/messages*" = "X のメッセージ"
 "twitter.com/messages*" = "X のメッセージ"

@@ -100,3 +100,27 @@ def test_query_is_removed_from_urls():
 def test_section_uses_fold_depth():
     assert CFG.section('https://github.com/owner/repo/pull/1') == 'github.com/owner/repo'
     assert CFG.section('https://a.example/x/y') == 'a.example'
+
+
+def test_search_page_whose_term_was_dropped_does_not_show_it_in_the_title():
+    g = build(visit(1, 0, 'https://www.bing.com/search?q=x', 'me@example.com - Search', core=1,
+                    term='me@example.com'))
+    n = g.nodes[1]
+    assert (n.kind, n.term, n.title) == ('search', None, lineage.SEARCH_TITLE)
+
+
+def test_search_page_reused_by_another_query_keeps_no_other_titles():
+    g = build(visit(1, 0, 'https://www.bing.com/search?q=a', 'pandas - Search', core=1, term='pandas'),
+              visit(2, 5, 'https://www.bing.com/search?q=b', 'numpy - Search', frm=1, term='numpy'))
+    assert set(g.nodes) == {1}
+    assert g.nodes[1].titles == []
+
+
+def test_masked_pages_with_different_labels_on_one_host_stay_apart():
+    privacy = Privacy(mask=(('github.com/work/*', '仕事のリポジトリ'), ('github.com/*', 'GitHub')))
+    g = lineage.build([visit(1, 0, 'https://github.com/work/app', 'app', core=1),
+                       visit(2, 5, 'https://github.com/me/notes', 'notes', frm=1),
+                       visit(3, 9, 'https://github.com/work/app', 'app', back=True, frm=2)], CFG, privacy)
+    assert sorted(n.title for n in g.nodes.values()) == ['GitHub', '仕事のリポジトリ']
+    assert {n.url for n in g.nodes.values()} == {'https://github.com/'}
+    assert len(g.nodes[1].times) == 2

@@ -21,6 +21,16 @@ from .privacy import Privacy, clean_url, host_of, scrub_title, site_key
 from .text import clean_title
 
 MAX_TITLES = 8
+SEARCH_TITLE = '検索結果'
+
+
+def _key(url: str, title: str, masked: bool) -> str:
+    """同じ節とみなす URL. 伏せた節は URL が host だけになるので, 伏せた名前も含める."""
+    return f'{url}\x1f{title}' if masked else url
+
+
+def _node_key(n: 'Node') -> str:
+    return _key(n.url, n.title, n.masked)
 
 
 @dataclass(frozen=True)
@@ -115,7 +125,9 @@ class _Builder:
     def absorb(self, target: Node, other_times: list[int], dur: int, title: str, term: str | None) -> None:
         target.times.extend(other_times)
         target.dur = max(target.dur, dur)
-        if title and title != target.title and title not in target.titles and len(target.titles) < MAX_TITLES:
+        # 検索結果のページは URL が同じでも検索語ごとに題名が違うので, 別の題名を持たない
+        if (target.kind != 'search' and title and title != target.title and title not in target.titles
+                and len(target.titles) < MAX_TITLES):
             target.titles.append(title)
         target.term = target.term or term
 
@@ -135,13 +147,16 @@ class _Builder:
         host = host_of(v.url)
         title = scrub_title(v.title)
         term = self.privacy.clean_term(v.term)
+        search = self.cfg.is_search(v.url)
         if masked is not None:
             title, host = masked
             url, term = clean_url(f'{v.url.split("://", 1)[0]}://{host}/'), None
             self.stats['masked'] += 1
-        search = self.cfg.is_search(v.url)
+        elif search and term is None:
+            # 検索結果の題名には検索語が入るので, 消した検索語が題名から漏れないようにする
+            title = SEARCH_TITLE
 
-        target = self._alias_target(v, url, parent)
+        target = self._alias_target(v, _key(url, title, masked is not None), parent)
         if target is not None:
             node = self.nodes[target]
             self.absorb(node, [v.t], v.dur, title, term)
@@ -167,7 +182,7 @@ class _Builder:
         """戻る・進む, または同じタブで同じ URL を開き直した訪問は, 既存の節に重ねる."""
         if v.back:
             cand = self.find(self.last_by_url.get(url))
-        elif parent is not None and not v.opener and self.nodes[parent].url == url:
+        elif parent is not None and not v.opener and _node_key(self.nodes[parent]) == url:
             cand = parent
         else:
             return None
@@ -182,7 +197,7 @@ class _Builder:
         return self.find(self.search_times[i][1])
 
     def _note(self, node: Node, t: int) -> None:
-        self.last_by_url[node.url] = node.id
+        self.last_by_url[_node_key(node)] = node.id
         if node.kind == 'search':
             self.search_times.append((t, node.id))   # 訪問は時刻順に来るので並びは保たれる
 
@@ -206,7 +221,8 @@ class _Builder:
             pid = self.find(node.parent)
             parent = self.nodes.get(pid) if pid is not None else None
             if (node.via not in ('same', 'tab') or parent is None or parent.section != node.section
-                    or parent.kind != node.kind or node.t0 - max(parent.times) > self.gap):
+                    or parent.kind != node.kind or node.t0 - max(parent.times) > self.gap
+                    or (node.masked or parent.masked) and _node_key(node) != _node_key(parent)):
                 entry[node.id] = node.id
                 continue
             if node.via == 'same' or clean_title(node.title) == clean_title(parent.title):
@@ -226,7 +242,7 @@ class _Builder:
         seen: dict[tuple, Node] = {}
         for node in sorted(self.nodes.values(), key=lambda n: n.t0):
             pid = self.find(node.parent)
-            keys = [(pid, 'url', node.url)]
+            keys = [(pid, 'url', _node_key(node))]
             if node.title:
                 keys.append((pid, 'title', node.section, node.kind, clean_title(node.title)))
             first = next((seen[k] for k in keys if k in seen and seen[k].id in self.nodes), None)
