@@ -24,13 +24,16 @@ MAX_TITLES = 8
 SEARCH_TITLE = '検索結果'
 
 
-def _key(url: str, title: str, masked: bool) -> str:
-    """同じ節とみなす URL. 伏せた節は URL が host だけになるので, 伏せた名前も含める."""
-    return f'{url}\x1f{title}' if masked else url
+def _key(url: str, title: str, masked: bool, term: str | None = None) -> str:
+    """同じ節とみなす URL. 伏せた節は URL が host だけになるので, 伏せた名前も含める.
+    検索結果も URL のクエリを落とすと検索語が消えるので, 検索語を含める (語が違えば別の節)."""
+    if masked:
+        return f'{url}\x1f{title}'
+    return f'{url}\x1e{term}' if term else url
 
 
 def _node_key(n: 'Node') -> str:
-    return _key(n.url, n.title, n.masked)
+    return _key(n.url, n.title, n.masked, n.term if n.kind == 'search' else None)
 
 
 @dataclass(frozen=True)
@@ -156,7 +159,7 @@ class _Builder:
             # 検索結果の題名には検索語が入るので, 消した検索語が題名から漏れないようにする
             title = SEARCH_TITLE
 
-        target = self._alias_target(v, _key(url, title, masked is not None), parent)
+        target = self._alias_target(v, _key(url, title, masked is not None, term if search else None), parent)
         if target is not None:
             node = self.nodes[target]
             self.absorb(node, [v.t], v.dur, title, term)

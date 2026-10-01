@@ -13,6 +13,8 @@ import bisect
 import datetime as dt
 import fnmatch
 import math
+import re
+import zoneinfo
 from collections import Counter
 from dataclasses import dataclass
 
@@ -85,6 +87,24 @@ class Timeline:
     stale: dict[int, float]    # 節 -> 開いていた日数
     workspace: dict[int, str]  # 節 -> ワークスペース
     tz_offsets: tuple[tuple[int, int], ...]  # (この時刻 [unix 秒] から, UTC からのずれ [分]). 夏時間の切り替えを表す
+
+
+_OFFSET = re.compile(r'([+-])(\d{2}):(\d{2})')
+
+
+def parse_tz(text: str | None) -> dt.tzinfo | None:
+    """設定の [episodes] timezone. 'UTC', '+09:00' の形か IANA の名前 ('Asia/Tokyo'). 無ければ None (この環境の現地時刻)."""
+    if not text:
+        return None
+    if text.upper() == 'UTC':
+        return dt.timezone.utc
+    if m := _OFFSET.fullmatch(text):
+        delta = dt.timedelta(hours=int(m[2]), minutes=int(m[3]))
+        return dt.timezone(-delta if m[1] == '-' else delta)
+    try:
+        return zoneinfo.ZoneInfo(text)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        raise ValueError(f'timezone = {text!r} が読めない. "UTC", "+09:00" か "Asia/Tokyo" の形で書く') from None
 
 
 def _local(t_us: int, tz: dt.tzinfo | None) -> dt.datetime:

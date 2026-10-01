@@ -7,6 +7,7 @@ title = "Tab Lineage"
 gap_minutes = 30        # 無操作がこれだけ続いたら回を区切る
 stale_hours = 12        # これ以上開いていたページに「放置」の印を付ける
 ws_share = 0.25         # 回とスレッドの多数決で, 最多のワークスペースがこの割合に届かなければ未分類にする
+# timezone = "+09:00"  # 回の ID と時刻の時間帯 ("UTC", "+09:00", "Asia/Tokyo"). 書かなければ実行した環境の現地時刻
 
 [lineage]
 search_window_seconds = 30   # 親の無いリンク訪問を, この秒数以内の検索の子とみなす

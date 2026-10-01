@@ -32,7 +32,11 @@ def analyze(dbs: list[str], config_path: str | None) -> Analysis:
     ecfg = episodes.EpisodeConfig.from_config(cfg)
     privacy = Privacy.from_config(cfg.get('privacy', {}))
     g = lineage.build(visits, lcfg, privacy)
-    return Analysis(cfg, g, episodes.build(g, ecfg), lcfg, ecfg, privacy, visits[-1].t)
+    try:
+        tz = episodes.parse_tz(cfg.get('episodes', {}).get('timezone'))
+    except ValueError as e:
+        raise SystemExit(str(e))
+    return Analysis(cfg, g, episodes.build(g, ecfg, tz), lcfg, ecfg, privacy, visits[-1].t)
 
 
 def _fmt_span(ep: episodes.Episode) -> str:
@@ -72,7 +76,8 @@ def cmd_build(a) -> None:
     if a.plan:
         tab_plan = json.loads(pathlib.Path(a.plan).read_text(encoding='utf-8'))
     elif a.session:
-        tab_plan = plan.build(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit)
+        tab_plan = plan.build(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
+                              labels=labels)
     data = site.payload(r.graph, r.timeline, r.cfg, labels, tab_plan)
     out = pathlib.Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +90,8 @@ def cmd_build(a) -> None:
 
 def cmd_arrange(a) -> None:
     r = analyze(a.db, a.config)
-    placed = plan.classify(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit)
+    placed = plan.classify(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
+                           labels=config.load_labels(a.labels))
     arr = arrange.build(placed, arrange.ArrangeConfig.from_config(r.cfg))
     print(arrange.outline(arr))
     if a.out:
@@ -169,6 +175,7 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser('arrange', help='今のタブをワークスペース・スタック・ブックマークへ並べ直す案を作る')
     common(p)
     p.add_argument('--session', required=True, help='今のタブのセッションファイル')
+    p.add_argument('--labels', help='スレッドに付けた名前の TOML (スタックの名前になる)')
     p.add_argument('--out', help='案を JSON で書き出す (実際の URL と題名が入る. 公開しない)')
     p.set_defaults(func=cmd_arrange)
 

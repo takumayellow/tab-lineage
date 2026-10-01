@@ -124,3 +124,11 @@ def test_masked_pages_with_different_labels_on_one_host_stay_apart():
     assert sorted(n.title for n in g.nodes.values()) == ['GitHub', '仕事のリポジトリ']
     assert {n.url for n in g.nodes.values()} == {'https://github.com/'}
     assert len(g.nodes[1].times) == 2
+
+
+def test_searches_for_different_terms_stay_apart():
+    # 検索結果の URL はクエリを落とすと同じになるが, 検索語が違えば別の調べもの
+    g = build(visit(1, 0, 'https://duckduckgo.com/?q=numpy+fft', 'numpy fft at DuckDuckGo', core=1, term='numpy fft'),
+              visit(2, 60, 'https://duckduckgo.com/?q=hann', 'hann window at DuckDuckGo', core=1, term='hann window'),
+              visit(3, 90, 'https://duckduckgo.com/?q=numpy+fft', 'numpy fft at DuckDuckGo', core=1, term='numpy fft'))
+    assert sorted((n.term, len(n.times)) for n in g.nodes.values()) == [('hann window', 1), ('numpy fft', 2)]
