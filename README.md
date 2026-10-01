@@ -6,12 +6,13 @@ Chromium 系ブラウザ（Vivaldi / Chrome / Edge / Brave）の閲覧履歴か�
 - 無操作の時間で「回」に区切り，回の中を話題ごとの「スレッド」に分け，本筋から外れた枝を「寄り道」として畳む．
 - 開いているタブ（セッションファイル）を読んで，重複・検索結果・放置したタブを見分けた整理案を出す．
 - 出力は外部への通信を持たない 1 枚の HTML．書体だけ Google Fonts から読む．
+- 整理案を Vivaldi へ戻せる（ワークスペース・名前付きのタブスタック・あとで読むのブックマーク）．
 
-ブラウザの設定や拡張機能には触らない．履歴 DB は読み取り専用で開き，解析はコピーに対して行う．
+履歴 DB は読み取り専用で開き，解析はコピーに対して行う．ブラウザに手を入れるのは `apply` だけで，それも足すだけ（タブ・ワークスペース・ブックマークを閉じない・消さない）．
 
 ## 使い方
 
-Python 3.11 以上．依存パッケージは無い．
+Python 3.11 以上．依存パッケージは無い（`apply` だけ websocket-client を使う）．
 
 ```sh
 pip install git+https://github.com/takumayellow/tab-lineage
@@ -45,6 +46,27 @@ pip install git+https://github.com/takumayellow/tab-lineage
    ```
 
    日付の違うコピーを複数渡すと訪問 ID で重ね合わせる．History は古い訪問から消えていくので，定期的にコピーしておくと長い期間を扱える．
+
+5. **タブを並べ直す**（Vivaldi）．今のタブを，ワークスペース → スタック → タブと，あとで読むのブックマークの木に分けた案を JSON に出す．
+
+   ```sh
+   tab-lineage arrange data/2026-09-30/History.db      --session data/2026-09-30/Session_13400000000000000      --config my.toml --out data/arrange.json
+   ```
+
+   JSON は手で直してよい（スタックの名前，ブックマークのフォルダ，タブの移動）．ワークスペースの絵文字，読みもののワークスペース，ブックマークのフォルダ分けは設定の `[arrange]` で決める．
+   出力には URL と題名がそのまま入るので，リポジトリやサイトに載せない．
+
+   起動中の Vivaldi に適用する．
+
+   ```sh
+   pip install "tab-lineage[apply] @ git+https://github.com/takumayellow/tab-lineage"
+   tab-lineage apply data/arrange.json --dry-run      # 木を表示するだけ
+   tab-lineage apply data/arrange.json --port 9222
+   ```
+
+   `apply` は DevTools プロトコルで Vivaldi の画面に接続する．Vivaldi を `--remote-debugging-port=9222` で起動しておく．Chromium 136 以降，既定のユーザーデータのフォルダではこのフラグが無視されるので，`--user-data-dir` で別のフォルダを指定して起動したものにしか適用できない．
+   ポートが開いている間は，この PC のどのプログラムもブラウザを操作でき，Cookie や保存したパスワードも読める．開けっぱなしにせず，適用が済んだらフラグ無しで起動し直す．
+   適用すると，案のワークスペースを名前で探して無ければ作り，最後に使ったウィンドウにタブを作ってスタックにまとめ，ブックマークバーにフォルダを足す．同じワークスペースに同じ URL のタブや，同じフォルダに同じ URL のブックマークがあれば足さないので，適用し直しても増えない．最初のワークスペースを開いたあと，ほかのワークスペースに作ったタブは休止させる（隠れたワークスペースのタブも休止させるまではメモリを使う）．
 
 ほかのコマンド: `stats`（集計），`tabs`（セッションファイルのタブを並び順に表示）．`tab-lineage <command> -h` で引数を表示する．
 
