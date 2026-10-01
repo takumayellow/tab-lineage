@@ -323,9 +323,9 @@ match = ["git.example.com/*", "docs.python.org/*", "pypi.org/*", "rich.readthedo
 
 <section id="stacks" aria-labelledby="stacks-h">
   <h2 id="stacks-h">タブスタック</h2>
-  <p>同じワークスペースの中で，同じスレッドに属するタブが 2 枚以上あれば，1 つのタブスタックにまとめてスレッドの名前を付ける（Vivaldi の「名前をつけたタブスタック」）．1 枚だけのタブはスタックにせず，そのまま並べる．枚数のしきい値は <code>[arrange] min_stack</code>．</p>
+  <p>同じワークスペースの中で，同じスレッドに属するタブが {{D_MIN_STACK}} 枚以上あれば，1 つのタブスタックにまとめてスレッドの名前を付ける（Vivaldi の「名前をつけたタブスタック」）．1 枚だけのタブはスタックにせず，そのまま並べる．枚数のしきい値は <code>[arrange] min_stack</code>．</p>
   <ul class="plain">
-    <li><b>スレッド</b>：無操作が 30 分続くまでの閲覧を 1 回とし，その回の木を題名の近さでまとめたもの．サンプルの昼の回は「窓関数とレポート」「numpy.fft の使い方」「スペクトルの描き方」の 3 つに分かれた．</li>
+    <li><b>スレッド</b>：無操作が {{D_GAP_MINUTES}} 分続くまでの閲覧を 1 回とし，その回の木を題名の近さでまとめたもの．サンプルの昼の回は「窓関数とレポート」「numpy.fft の使い方」「スペクトルの描き方」の 3 つに分かれた．</li>
     <li><b>名前</b>：<a href="#labels">labels.toml</a> でスレッドに付けた名前．付けていなければ，題名から自動で付けた名前になる．</li>
     <li><b>寄り道</b>：本筋と話題がほとんど重ならない枝は，「寄り道: 〈枝の最初のページ〉」という別のスタックになる．サンプルでは，窓関数を調べる途中でフーリエの伝記から開いたピラミッドの動画より先が寄り道と判定され，旅行やレシピのページと一緒に未分類のワークスペースへまとまった．</li>
   </ul>
@@ -336,7 +336,7 @@ match = ["git.example.com/*", "docs.python.org/*", "pypi.org/*", "rich.readthedo
   <h2 id="later-h">あとで読む</h2>
   <p>開いたまま読まなくなったタブは，閉じる前にブックマークバーの「あとで読む」フォルダへ移す．移すのは次の 2 種類．</p>
   <ul class="plain">
-    <li><b>放置したタブ</b>：最後に見てから 3 日以上たったタブ．日数は履歴の最後の訪問の時刻から数える．サンプルでは 4 日前の夜に開いた記事が当たる．</li>
+    <li><b>放置したタブ</b>：最後に見てから {{D_STASH_DAYS}} 日以上たったタブ．日数は履歴の最後の訪問の時刻から数える．サンプルでは 4 日前の夜に開いた記事が当たる．</li>
     <li><b>読みもののワークスペースのタブ</b>：<code>[arrange] reading_workspaces</code> に書いたワークスペースへ振り分けたタブは，新しくても開いたままにせず，あとで読むへ回す．サンプルでは「読みもの」．</li>
   </ul>
   <p>フォルダは <code>[[arrange.folder]]</code> の規則で分ける．上から順に照合し，最初に当たったフォルダへ入れる．<code>match</code> は URL の glob，<code>title</code> は題名の正規表現（大文字と小文字を区別しない）．どれにも当たらなければ「あとで読む」の直下に入る．</p>
@@ -391,12 +391,12 @@ match = ["developer.mozilla.org/*"]</code></pre>
     <li><b>同じサイトを畳む</b>：同じタブでの同じサイト内の移動は 1 つの節にする．木の深さはサイトをまたいだ移動だけを表す．</li>
     <li><b>戻る・重複をまとめる</b>：戻る・進むで同じ URL に戻った訪問と，親が同じで URL か題名が同じ兄弟を 1 つの節にする．</li>
     <li><b>検索を節にする</b>：検索結果のページは検索語を持つ節として残す．語が違えば別の節．</li>
-    <li><b>検索を親にする</b>：親の記録が無いリンクの訪問は，直前 30 秒以内の検索の子にする．</li>
-    <li><b>回に区切る</b>：無操作が 30 分続いたら区切る．</li>
+    <li><b>検索を親にする</b>：親の記録が無いリンクの訪問は，直前 {{D_SEARCH_WINDOW}} 秒以内の検索の子にする．</li>
+    <li><b>回に区切る</b>：無操作が {{D_GAP_MINUTES}} 分続いたら区切る．</li>
     <li><b>スレッドに分ける</b>：同じ回の木を，題名の近さ（日本語は文字の 2-gram，英数字は単語で数えた TF-IDF の余弦）か，入口のサイトが同じかでまとめる．</li>
     <li><b>寄り道を畳む</b>：サイトが変わった所から先の枝のうち，話題が残りとほとんど重ならないものに印を付けて畳む．</li>
-    <li><b>放置に印を付ける</b>：12 時間以上開いていたページに印を付ける．</li>
-    <li><b>ワークスペースへ振り分ける</b>：訪問を設定の glob で分け，回とスレッドには訪問数の多数決で付ける．最多のワークスペースが訪問の 4 分の 1（<code>ws_share</code>）に届かない回は未分類にする．</li>
+    <li><b>放置に印を付ける</b>：{{D_STALE_HOURS}} 時間以上開いていたページに印を付ける．</li>
+    <li><b>ワークスペースへ振り分ける</b>：訪問を設定の glob で分け，回とスレッドには訪問数の多数決で付ける．最多のワークスペースが訪問の {{D_WS_SHARE}}（<code>ws_share</code>）に届かない回は未分類にする．</li>
   </ol>
 </section>
 
@@ -436,15 +436,15 @@ match = ["developer.mozilla.org/*"]</code></pre>
       <tbody>
         <tr><td><code>[[workspace]]</code></td><td><code>name</code> と <code>match</code>（<code>host/path</code> の glob の並び）．書いた順にワークスペースを並べる．</td><td>なし</td></tr>
         <tr><td><code>[arrange] reading_workspaces</code></td><td>タブをあとで読むへ回すワークスペース．</td><td><code>[]</code></td></tr>
-        <tr><td><code>[arrange] reading_root</code></td><td>ブックマークバーに作るフォルダの名前．</td><td><code>"あとで読む"</code></td></tr>
+        <tr><td><code>[arrange] reading_root</code></td><td>ブックマークバーに作るフォルダの名前．</td><td><code>"{{D_READING_ROOT}}"</code></td></tr>
         <tr><td><code>[[arrange.folder]]</code></td><td><code>path</code>・<code>match</code>・<code>title</code>．あとで読むの中のフォルダ分け．</td><td>なし</td></tr>
         <tr><td><code>[arrange] emoji</code></td><td>ワークスペースの絵文字．</td><td><code>{}</code></td></tr>
-        <tr><td><code>[arrange] unsorted</code></td><td>どこにも当たらないタブのワークスペース．</td><td><code>"未分類"</code></td></tr>
-        <tr><td><code>[arrange] min_stack</code></td><td>スタックにする枚数．</td><td><code>2</code></td></tr>
-        <tr><td><code>[episodes] gap_minutes</code></td><td>回を区切る無操作の分数．</td><td><code>30</code></td></tr>
+        <tr><td><code>[arrange] unsorted</code></td><td>どこにも当たらないタブのワークスペース．</td><td><code>"{{D_UNSORTED}}"</code></td></tr>
+        <tr><td><code>[arrange] min_stack</code></td><td>スタックにする枚数．</td><td><code>{{D_MIN_STACK}}</code></td></tr>
+        <tr><td><code>[episodes] gap_minutes</code></td><td>回を区切る無操作の分数．</td><td><code>{{D_GAP_MINUTES}}</code></td></tr>
         <tr><td><code>[episodes] timezone</code></td><td>回の ID と時刻の時間帯（<code>"UTC"</code>・<code>"+09:00"</code>・<code>"Asia/Tokyo"</code>）．</td><td>実行した環境</td></tr>
         <tr><td><code>[lineage] search</code></td><td>検索結果のページの glob．</td><td>主な検索エンジン</td></tr>
-        <tr><td><code>[threads] detour_theta</code></td><td>寄り道とみなす話題の重なりのしきい値．</td><td><code>0.04</code></td></tr>
+        <tr><td><code>[threads] detour_theta</code></td><td>寄り道とみなす話題の重なりのしきい値．</td><td><code>{{D_DETOUR_THETA}}</code></td></tr>
         <tr><td><code>[privacy]</code></td><td>消す・伏せるページ（<a href="#privacy">プライバシー</a>）．</td><td>ログイン・メール・地図など</td></tr>
       </tbody>
     </table>
@@ -470,7 +470,7 @@ match = ["developer.mozilla.org/*"]</code></pre>
 
 <section id="install" aria-labelledby="install-h">
   <h2 id="install-h">導入とコマンド</h2>
-  <p>Python 3.11 以上．依存パッケージは無く，apply だけ websocket-client を使う．</p>
+  <p>Python 3.11 以上．依存パッケージは Windows の tzdata（時間帯の表）だけで，apply は websocket-client も使う．</p>
   <pre><code>pip install "tab-lineage[apply] @ git+https://github.com/takumayellow/tab-lineage"</code></pre>
   <div class="scroll">
     <table class="keys">
@@ -496,7 +496,7 @@ match = ["developer.mozilla.org/*"]</code></pre>
     <li>apply は Vivaldi だけ．ワークスペースとタブスタックが Vivaldi の機能なので．系統樹のサイトと整理案は Chrome・Edge・Brave の履歴からも作れる．</li>
     <li>apply は DevTools のポートを開けて起動したブラウザにしか適用できない．Chromium 136 以降は既定のユーザーデータのフォルダで開けられない．</li>
     <li>ワークスペースの作成と切り替えは，Vivaldi の画面の内部の関数を探して呼ぶ．版が変わって見つからないときは，ワークスペースを手で作っておけば名前で照合して続ける．</li>
-    <li>一度作ったスタックに適用し直すと，名前は付け直すが，案から外れたタブをスタックから出さない．</li>
+    <li>前に作ったスタックに適用し直すと，名前は付け直すが，同じスタックに入っている「あとで読む」行き・閉じる側のタブ（<code>--close</code> を付けないとき）と案に無いタブはスタックから出さない（<a href="https://github.com/takumayellow/tab-lineage/issues/3">#3</a>）．</li>
     <li>リンクを介さずに別の話題へ移った場合，履歴では親子がつながらない．寄り道は話題の重なりで判定するので，言語の違うページが混ざった枝は寄り道と判定されやすい．外れたら JSON を手で直す．</li>
     <li>POST で検索するエンジン（Startpage など）は検索語が履歴に残らない．</li>
     <li>ブラウザが書き込み中の最新のセッションファイルは読めないことがあり，そのときは読めるうち一番新しいものを使う．</li>

@@ -166,5 +166,6 @@ def test_parse_timezone():
     assert episodes.parse_tz(None) is None
     assert episodes.parse_tz('UTC') == UTC
     assert episodes.parse_tz('-05:30').utcoffset(None) == -dt.timedelta(hours=5, minutes=30)
+    assert episodes.parse_tz('Asia/Tokyo').utcoffset(dt.datetime(2026, 1, 1)) == dt.timedelta(hours=9)
     with pytest.raises(ValueError):
         episodes.parse_tz('+9')

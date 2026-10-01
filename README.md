@@ -14,7 +14,7 @@ Chromium 系ブラウザ（Vivaldi / Chrome / Edge / Brave）の閲覧履歴か�
 
 ## 使い方
 
-Python 3.11 以上．依存パッケージは無い（`apply` だけ websocket-client を使う）．
+Python 3.11 以上．依存パッケージは Windows の tzdata（時間帯の表）だけ．`apply` は websocket-client も使う．
 
 ```sh
 pip install git+https://github.com/takumayellow/tab-lineage

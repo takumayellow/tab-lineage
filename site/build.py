@@ -15,7 +15,7 @@ import pathlib
 import re
 import sys
 import tempfile
-from collections import Counter
+from fractions import Fraction
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SAMPLE = ROOT / 'examples' / 'sample'
@@ -66,7 +66,7 @@ def fates(placed: list[plan.Placed], arr: dict, acfg: arrange.ArrangeConfig) -> 
             out.append({'p': p, 'kind': 'close', 'dest': arrange.WHY[status], 'reason': reason})
         elif status == 'stash' or p.workspace in acfg.reading_workspaces:
             folder = '/'.join((acfg.reading_root, *acfg.folder_of(p.tab.url, link[0])))
-            reason = ('最後に見てから 3 日以上たっている' if status == 'stash'
+            reason = (f'最後に見てから {plan.STASH_DAYS} 日以上たっている' if status == 'stash'
                       else f'読みもののワークスペース「{p.workspace}」のタブ')
             out.append({'p': p, 'kind': 'read', 'dest': folder, 'reason': reason})
         else:
@@ -145,6 +145,38 @@ def render_fates(rows: list[dict]) -> str:
     return ''.join(out)
 
 
+def _share(x: float) -> str:
+    """0.25 -> '4 分の 1'. 分数で書けなければ百分率."""
+    f = Fraction(x).limit_denominator(10)
+    return f'{f.denominator} 分の {f.numerator}' if float(f) == x else f'{x:.0%}'
+
+
+def defaults() -> dict[str, str]:
+    """解説の本文と表に書く既定値. default.toml から取り, 本文に数字を写さない."""
+    d = config.default()
+    return {
+        'D_GAP_MINUTES': str(d['episodes']['gap_minutes']),
+        'D_STALE_HOURS': str(d['episodes']['stale_hours']),
+        'D_WS_SHARE': _share(d['episodes']['ws_share']),
+        'D_SEARCH_WINDOW': str(d['lineage']['search_window_seconds']),
+        'D_DETOUR_THETA': str(d['threads']['detour_theta']),
+        'D_READING_ROOT': esc(d['arrange']['reading_root']),
+        'D_UNSORTED': esc(d['arrange']['unsorted']),
+        'D_MIN_STACK': str(d['arrange']['min_stack']),
+        'D_STASH_DAYS': str(plan.STASH_DAYS),
+    }
+
+
+def fill(page: str, values: dict[str, str]) -> str:
+    """型紙の {{X}} を 1 回で置き換える. 差し込んだ中身にたまたま {{X}} があっても展開しない.
+    型紙の印と渡した値が 1 つでも食い違えば止める (書き忘れも使い忘れも見逃さない)."""
+    marks = set(re.findall(r'\{\{([A-Z_]+)\}\}', page))
+    if marks != set(values):
+        raise SystemExit(f'型紙の印と値が合わない: 値が無い {sorted(marks - set(values))}, '
+                         f'使われない値 {sorted(set(values) - marks)}')
+    return re.sub(r'\{\{([A-Z_]+)\}\}', lambda m: values[m.group(1)], page)
+
+
 def _run(argv: list[str]) -> str:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -172,14 +204,11 @@ def build(out_dir: pathlib.Path) -> None:
     def count_links(node: dict) -> int:
         return len(node['links']) + sum(count_links(c) for c in node['children'])
 
-    kinds = Counter(r['kind'] for r in rows)
+    n_stacks = sum(1 for w in arr['workspaces'] for i in w['items'] if i['stack'])
     values = {
         'VERSION': __version__,
         'N_TABS': str(len(rows)),
         'N_WINDOWS': str(len({r['p'].tab.window for r in rows})),
-        'N_WS': str(len(arr['workspaces'])),
-        'N_STACKS': str(sum(1 for w in arr['workspaces'] for i in w['items'] if i['stack'])),
-        'N_KEEP': str(kinds['ws']),
         'N_BOOKMARKS': str(count_links(arr['bookmarks'])),
         'N_CLOSE': str(len(arr['close'])),
         'BEFORE': render_before(rows),
@@ -191,14 +220,13 @@ def build(out_dir: pathlib.Path) -> None:
         'OUTLINE_OUT': esc(outline_text.rstrip()),
         'CONFIG': esc(conf.read_text(encoding='utf-8').rstrip()),
         'LABELS': esc(labels.read_text(encoding='utf-8').rstrip()),
+        **defaults(),
     }
-    page = TEMPLATE.read_text(encoding='utf-8')
-    # 差し込んだ中身にたまたま {{X}} があっても展開しないよう, 型紙の印を 1 回で置き換える
-    page = re.sub(r'\{\{([A-Z_]+)\}\}', lambda m: values[m.group(1)], page)
+    page = fill(TEMPLATE.read_text(encoding='utf-8'), values)
     (out_dir / 'index.html').write_text(page, encoding='utf-8')
     (out_dir / '.nojekyll').write_text('', encoding='utf-8')
-    print(f'{out_dir / "index.html"}: タブ {len(rows)} 枚 -> ワークスペース {values["N_WS"]} つ, '
-          f'スタック {values["N_STACKS"]} 個, ブックマーク {values["N_BOOKMARKS"]} 件, 閉じる {values["N_CLOSE"]} 枚')
+    print(f'{out_dir / "index.html"}: タブ {len(rows)} 枚 -> ワークスペース {len(arr["workspaces"])} つ, '
+          f'スタック {n_stacks} 個, ブックマーク {values["N_BOOKMARKS"]} 件, 閉じる {values["N_CLOSE"]} 枚')
 
 
 if __name__ == '__main__':

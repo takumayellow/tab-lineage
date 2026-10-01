@@ -3,14 +3,20 @@ import importlib.util
 import pathlib
 import re
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def _build(out):
+def _module():
     spec = importlib.util.spec_from_file_location('site_build', ROOT / 'site' / 'build.py')
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    mod.build(out)
+    return mod
+
+
+def _build(out):
+    _module().build(out)
 
 
 def test_site_builds_from_the_sample(tmp_path, capsys):
@@ -25,3 +31,23 @@ def test_site_builds_from_the_sample(tmp_path, capsys):
     # 目次とページ内のリンクの行き先が全部ある
     ids = set(re.findall(r'\bid="([^"]+)"', page))
     assert {h for h in re.findall(r'href="#([^"]+)"', page)} <= ids
+    # 本文の既定値は default.toml から入る
+    assert '直前 30 秒以内の検索の子にする' in page
+    assert '訪問の 4 分の 1（<code>ws_share</code>）' in page
+    assert '最後に見てから 3 日以上たったタブ' in page
+
+
+def test_fill_rejects_missing_and_unused_values():
+    mod = _module()
+    assert mod.fill('{{A}} と {{B}}', {'A': '{{B}}', 'B': 'b'}) == '{{B}} と b'
+    with pytest.raises(SystemExit, match='値が無い'):
+        mod.fill('{{A}} と {{B}}', {'A': 'a'})
+    with pytest.raises(SystemExit, match='使われない値'):
+        mod.fill('{{A}}', {'A': 'a', 'C': 'c'})
+
+
+def test_share_reads_as_a_fraction():
+    mod = _module()
+    assert mod._share(0.25) == '4 分の 1'
+    assert mod._share(0.3) == '10 分の 3'
+    assert mod._share(0.123) == '12%'

@@ -24,6 +24,7 @@ from .text import clean_title
 SHELF = '棚へ（保存して閉じる）'
 UNSORTED = '分類待ち'
 DETOUR = '寄り道: '
+STASH_DAYS = 3  # 最後に見てからこの日数を過ぎたタブを放置とみなす
 # 同じページかを比べるときに無視するクエリ (広告やメールの計測用). ほかのクエリが違えば別のページ
 _TRACKING = re.compile(r'utm_\w+|fbclid|gclid|dclid|msclkid|yclid|igshid|mc_cid|mc_eid|_ga|_gl')
 
@@ -76,7 +77,7 @@ class Placed:
 
 
 def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
-             privacy: Privacy, now_us: int, stash_days: float = 3, labels: dict | None = None) -> list[Placed]:
+             privacy: Privacy, now_us: int, stash_days: float = STASH_DAYS, labels: dict | None = None) -> list[Placed]:
     """labels は labels.toml を読んだもの. 名前を付けたスレッドはその名前を goal にする."""
     last_seen: dict[str, int] = {}
     node_of: dict[str, int] = {}
@@ -112,7 +113,7 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
 
 
 def build(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
-          privacy: Privacy, now_us: int, stash_days: float = 3, labels: dict | None = None) -> dict:
+          privacy: Privacy, now_us: int, stash_days: float = STASH_DAYS, labels: dict | None = None) -> dict:
     rows: list[list[str]] = []
     groups: dict[tuple[str, str], list[list[int]]] = defaultdict(list)
     entries: dict[int, list[int]] = {}

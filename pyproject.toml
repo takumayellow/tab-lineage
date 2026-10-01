@@ -9,7 +9,7 @@ description = "Chromium 系ブラウザの履歴から閲覧の系統樹を作�
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["tzdata; sys_platform == 'win32'"]  # Windows には IANA の時間帯の表が無い (timezone = "Asia/Tokyo")
 keywords = ["browser", "history", "tabs", "vivaldi", "chromium"]
 classifiers = [
   "Programming Language :: Python :: 3",

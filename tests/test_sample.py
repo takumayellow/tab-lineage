@@ -26,6 +26,7 @@ def test_sample_arranges_into_workspaces_stacks_and_bookmarks(tmp_path, capsys):
     stacks = {i['stack']: len(i['tabs']) for w in arr['workspaces'] for i in w['items'] if i['stack']}
     assert stacks['窓関数とレポート'] == 3
     assert stacks['numpy.fft の使い方'] == 2
+    assert stacks['スペクトルの描き方'] == 2
     assert ws['未分類']['items'][0]['stack'].startswith('寄り道: ')
     folders = {f['title']: f for f in arr['bookmarks']['children']}
     dev = {f['title']: len(f['links']) for f in folders['開発']['children']}
