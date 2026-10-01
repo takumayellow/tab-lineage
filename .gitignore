@@ -16,5 +16,7 @@ History-journal
 Session_*
 Tabs_*
 out/
+/data/
+arrange*.json
 *.html
 !src/tab_lineage/viewer/index.html

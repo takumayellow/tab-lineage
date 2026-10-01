@@ -7,7 +7,7 @@ import pathlib
 import sys
 from dataclasses import dataclass
 
-from . import config, episodes, histdb, lineage, plan, session, site, snapshot
+from . import arrange, config, episodes, histdb, lineage, plan, session, site, snapshot
 from .privacy import Privacy
 
 
@@ -82,6 +82,38 @@ def cmd_build(a) -> None:
     print(f'{out}: {c["episodes"]} 回, {c["nodes"]} 節, {c["visits"]} 訪問, {out.stat().st_size / 2**20:.1f} MB')
 
 
+def cmd_arrange(a) -> None:
+    r = analyze(a.db, a.config)
+    placed = plan.classify(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit)
+    arr = arrange.build(placed, arrange.ArrangeConfig.from_config(r.cfg))
+    print(arrange.outline(arr))
+    if a.out:
+        out = pathlib.Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(arr, ensure_ascii=False, indent=1), encoding='utf-8')
+        print(f'{out}: 手で直してから apply に渡せる')
+
+
+def cmd_apply(a) -> None:
+    try:
+        arr = arrange.validate(json.loads(pathlib.Path(a.plan).read_text(encoding='utf-8')))
+    except (OSError, ValueError) as e:
+        raise SystemExit(f'{a.plan}: {e}')
+    print(arrange.outline(arr))
+    if a.dry_run:
+        return
+    from . import vivaldi
+    res = vivaldi.apply(arr, port=a.port, hibernate=not a.no_hibernate)
+    print(f'タブ {res["tabs"]} 枚 (開いてあった {res["already"]} 枚は作らない), スタック {res["stacks"]} 個, ブックマーク {res["bookmarks"]["added"]} 件 '
+          f'(既にあった {res["bookmarks"]["skipped"]} 件は足さない), 休止 {res["hibernated"]} 枚')
+    for f in res['failed']:
+        print(f'スタックにできなかった: {f}')
+    if res['created']:
+        print('作ったワークスペース: ' + ', '.join(res['created']))
+    if not res['switched']:
+        print('ワークスペースを切り替える関数が見つからなかった. 画面左上のボタンから開く')
+
+
 def cmd_tabs(a) -> None:
     for t in session.load(a.session):
         print(f'{t.window}\t{t.index}\t{t.title}\t{t.url}')
@@ -122,6 +154,19 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--plan', help='手で作った整理案の JSON (--session より優先)')
     p.add_argument('--json', help='埋め込んだデータを JSON でも書き出す')
     p.set_defaults(func=cmd_build)
+
+    p = sub.add_parser('arrange', help='今のタブをワークスペース・スタック・ブックマークへ並べ直す案を作る')
+    common(p)
+    p.add_argument('--session', required=True, help='今のタブのセッションファイル')
+    p.add_argument('--out', help='案を JSON で書き出す (実際の URL と題名が入る. 公開しない)')
+    p.set_defaults(func=cmd_arrange)
+
+    p = sub.add_parser('apply', help='arrange の案を起動中の Vivaldi の最後に使ったウィンドウに適用する (足すだけで, 閉じない)')
+    p.add_argument('plan', help='arrange --out の JSON')
+    p.add_argument('--port', type=int, default=9222, help='Vivaldi の --remote-debugging-port')
+    p.add_argument('--dry-run', action='store_true', help='案を表示するだけで Vivaldi に接続しない')
+    p.add_argument('--no-hibernate', action='store_true', help='ほかのワークスペースのタブを休止させない')
+    p.set_defaults(func=cmd_apply)
 
     p = sub.add_parser('tabs', help='セッションファイルの開いているタブを並び順に表示する')
     p.add_argument('session')

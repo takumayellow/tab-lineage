@@ -66,3 +66,17 @@ drop_terms = []
 "*.slack.com/*" = "Slack"
 "www.messenger.com/*" = "メッセンジャー"
 "web.whatsapp.com/*" = "WhatsApp"
+
+# arrange: 今のタブをワークスペース・スタック・ブックマークへ並べ直す案の設定.
+# ワークスペースは [[workspace]] (name と match) の順に並べる.
+[arrange]
+reading_root = "あとで読む"     # ブックマークバーに作るフォルダ. 放置したタブはここへ回す
+reading_workspaces = []         # このワークスペースのタブも開いたままにせずブックマークへ回す
+unsorted = "未分類"             # どのワークスペースにも当たらないタブの行き先
+min_stack = 2                   # 同じスレッドのタブがこの枚数以上あればスタックにする
+emoji = {}                      # ワークスペースの絵文字. 例: { "大学" = "🎓" }
+# あとで読むの中のフォルダ. 上から順に照合し, 最初に当たったフォルダへ入れる. 当たらなければ直下.
+# [[arrange.folder]]
+# path = "開発/Python"
+# match = ["docs.python.org/*"]     # 'host/path' の glob
+# title = "(?i)python"              # 題名の正規表現

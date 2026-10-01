@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 
 from .episodes import EpisodeConfig, Timeline, thread_members
 from .histdb import US
@@ -30,8 +31,19 @@ def _thread_labels(g: Graph, tl: Timeline) -> dict[int, str]:
     return out
 
 
-def build(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
-          privacy: Privacy, now_us: int, stash_days: float = 3) -> dict:
+@dataclass(frozen=True)
+class Placed:
+    """1 枚のタブの分類. status は keep / dup / serp / stash と, プライバシーの設定で消す drop."""
+    tab: Tab
+    title: str            # 伏せたあとの題名 (サイトに出す)
+    status: str
+    workspace: str | None
+    goal: str             # 属するスレッドの名前. 無ければ host
+    first: int            # dup のとき, 同じページの最初のタブの位置. それ以外は自分の位置
+
+
+def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
+             privacy: Privacy, now_us: int, stash_days: float = 3) -> list[Placed]:
     last_seen: dict[str, int] = {}
     node_of: dict[str, int] = {}
     for i, n in g.nodes.items():
@@ -39,11 +51,11 @@ def build(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: Ep
             last_seen[n.url], node_of[n.url] = n.t1, i
     labels = _thread_labels(g, tl)
 
-    rows: list[list[str]] = []
-    groups: dict[tuple[str, str], list[list[int]]] = defaultdict(list)
-    first_of: dict[str, list[int]] = {}
+    out: list[Placed] = []
+    first_of: dict[str, int] = {}
     for tab in tabs:
         if privacy.dropped(tab.url, tab.title):
+            out.append(Placed(tab, '', 'drop', None, '', len(out)))
             continue
         masked = privacy.mask_of(tab.url)
         host = masked[1] if masked else host_of(tab.url)
@@ -51,7 +63,6 @@ def build(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: Ep
         url = clean_url(f'{tab.url.split("://", 1)[0]}://{host}/') if masked else clean_url(tab.url, privacy.keep_query)
         title = masked[0] if masked else (clean_title(scrub_title(tab.title)) or host)
         key = f'{host}\n{title}' if masked else url
-        n = len(rows) + 1
         if key in first_of:
             status = 'dup'
         elif lcfg.is_search(tab.url):
@@ -60,19 +71,32 @@ def build(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: Ep
             status = 'stash'
         else:
             status = 'keep'
-        rows.append([title, status])
-        if status == 'dup':
-            first_of[key].append(n)
-            continue
-        entry = [n]
-        first_of[key] = entry
-        ws = SHELF if status == 'stash' else (ecfg.workspace_of(tab.url) or UNSORTED)
+        first = first_of.setdefault(key, len(out))
         goal = labels.get(node_of.get(url, -1)) or host
-        groups[(ws, goal)].append(entry)
+        out.append(Placed(tab, title, status, ecfg.workspace_of(tab.url), goal, first))
+    return out
+
+
+def build(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
+          privacy: Privacy, now_us: int, stash_days: float = 3) -> dict:
+    rows: list[list[str]] = []
+    groups: dict[tuple[str, str], list[list[int]]] = defaultdict(list)
+    entries: dict[int, list[int]] = {}
+    for k, p in enumerate(classify(tabs, g, tl, lcfg, ecfg, privacy, now_us, stash_days)):
+        if p.status == 'drop':
+            continue
+        rows.append([p.title, p.status])
+        n = len(rows)
+        if p.status == 'dup':
+            entries[p.first].append(n)
+            continue
+        entries[k] = [n]
+        ws = SHELF if p.status == 'stash' else (p.workspace or UNSORTED)
+        groups[(ws, p.goal)].append(entries[k])
 
     tree: dict[str, list[dict]] = defaultdict(list)
-    for (ws, goal), entries in groups.items():
-        tree[ws].append({'k': 'goal', 'label': goal, 'sub': [{'t': e} for e in entries]})
+    for (ws, goal), members in groups.items():
+        tree[ws].append({'k': 'goal', 'label': goal, 'sub': [{'t': e} for e in members]})
     order = sorted(tree, key=lambda w: (w == SHELF, w == UNSORTED, w))
     return {
         'source': 'auto',
