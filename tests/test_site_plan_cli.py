@@ -169,3 +169,6 @@ def test_parse_timezone():
     assert episodes.parse_tz('Asia/Tokyo').utcoffset(dt.datetime(2026, 1, 1)) == dt.timedelta(hours=9)
     with pytest.raises(ValueError):
         episodes.parse_tz('+9')
+    for bad in ('+09:60', '+24:00'):
+        with pytest.raises(ValueError, match='読めない'):
+            episodes.parse_tz(bad)

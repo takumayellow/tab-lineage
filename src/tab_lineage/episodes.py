@@ -89,7 +89,7 @@ class Timeline:
     tz_offsets: tuple[tuple[int, int], ...]  # (この時刻 [unix 秒] から, UTC からのずれ [分]). 夏時間の切り替えを表す
 
 
-_OFFSET = re.compile(r'([+-])(\d{2}):(\d{2})')
+_OFFSET = re.compile(r'([+-])([01]\d|2[0-3]):([0-5]\d)')
 
 
 def parse_tz(text: str | None) -> dt.tzinfo | None:
