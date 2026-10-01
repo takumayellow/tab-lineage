@@ -5,6 +5,7 @@ import argparse
 import json
 import pathlib
 import sys
+import time
 from dataclasses import dataclass
 
 from . import arrange, config, episodes, histdb, lineage, plan, session, site, snapshot
@@ -103,13 +104,23 @@ def cmd_apply(a) -> None:
     if a.dry_run:
         return
     from . import vivaldi
-    res = vivaldi.apply(arr, port=a.port, hibernate=not a.no_hibernate)
-    print(f'タブ {res["tabs"]} 枚 (開いてあった {res["already"]} 枚は作らない), スタック {res["stacks"]} 個, ブックマーク {res["bookmarks"]["added"]} 件 '
-          f'(既にあった {res["bookmarks"]["skipped"]} 件は足さない), 休止 {res["hibernated"]} 枚')
+    # 移したタブや閉じたタブを戻せるように, 適用の前に全部のタブを案の隣へ控える
+    backup = pathlib.Path(a.plan).with_name(f'{pathlib.Path(a.plan).stem}.before-{time.strftime("%Y%m%d-%H%M%S")}.json')
+    backup.write_text(json.dumps(vivaldi.tabs(a.port), ensure_ascii=False, indent=1), encoding='utf-8')
+    print(f'{backup}: 適用する前のタブの控え')
+    res = vivaldi.apply(arr, port=a.port, hibernate=not a.no_hibernate, close=a.close)
+    print(f'タブ {res["tabs"]} 枚 (開いていたのを移した {res["adopted"]} 枚, 元の場所のまま {res["already"]} 枚, '
+          f'新しく開いた {res["made"]} 枚, 固定したタブのまま {res["kept"]} 枚), スタック {res["stacks"]} 個, ブックマーク {res["bookmarks"]["added"]} 件 '
+          f'(既にあった {res["bookmarks"]["skipped"]} 件は足さない), 閉じた {res["closed"]} 枚, 休止 {res["hibernated"]} 枚')
     for f in res['failed']:
-        print(f'スタックにできなかった: {f}')
+        print(f'できなかった: {f}')
     if res['created']:
         print('作ったワークスペース: ' + ', '.join(res['created']))
+    if res['left']:
+        print(f'閉じなかったタブ {len(res["left"])} 枚 (案に無い・固定した・移せなかったタブ):' if a.close else
+              f'残したタブ {len(res["left"])} 枚 (閉じるなら --close):')
+        for title, url in res['left']:
+            print(f'  {title}  {url}')
     if not res['switched']:
         print('ワークスペースを切り替える関数が見つからなかった. 画面左上のボタンから開く')
 
@@ -161,11 +172,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--out', help='案を JSON で書き出す (実際の URL と題名が入る. 公開しない)')
     p.set_defaults(func=cmd_arrange)
 
-    p = sub.add_parser('apply', help='arrange の案を起動中の Vivaldi の最後に使ったウィンドウに適用する (足すだけで, 閉じない)')
+    p = sub.add_parser('apply', help='arrange の案を起動中の Vivaldi の最後に使ったウィンドウに適用する')
     p.add_argument('plan', help='arrange --out の JSON')
     p.add_argument('--port', type=int, default=9222, help='Vivaldi の --remote-debugging-port')
     p.add_argument('--dry-run', action='store_true', help='案を表示するだけで Vivaldi に接続しない')
     p.add_argument('--no-hibernate', action='store_true', help='ほかのワークスペースのタブを休止させない')
+    p.add_argument('--close', action='store_true',
+                   help='閉じる案のタブとブックマークに入れたタブを閉じる')
     p.set_defaults(func=cmd_apply)
 
     p = sub.add_parser('tabs', help='セッションファイルの開いているタブを並び順に表示する')

@@ -20,3 +20,4 @@ out/
 arrange*.json
 *.html
 !src/tab_lineage/viewer/index.html
+*.before-*.json
