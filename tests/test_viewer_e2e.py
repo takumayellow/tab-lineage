@@ -8,6 +8,7 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 
 import pytest
 
@@ -23,6 +24,8 @@ CANDIDATES = [
 ]
 BROWSER = next((p for p in CANDIDATES if p and os.path.isfile(p)), None)
 pytestmark = pytest.mark.skipif(BROWSER is None, reason='Edge / Chrome が見つからない')
+# GitHub Actions の Linux ではサンドボックスの補助プログラムが使えず起動しない. 開くのはテストで作ったページだけ
+SANDBOX = ['--no-sandbox'] if os.environ.get('CI') and sys.platform == 'linux' else []
 
 VISITS = [
     visit(1, 0, 'https://www.bing.com/search?q=pandas', 'pandas - Search', core=1, term='pandas'),
@@ -47,7 +50,7 @@ def page(tmp_path_factory):
 def render(page, route: str) -> str:
     """route を開いたあとの <main> の中身."""
     out, d = page
-    r = subprocess.run([BROWSER, '--headless=new', '--disable-gpu', '--no-first-run',
+    r = subprocess.run([BROWSER, *SANDBOX, '--headless=new', '--disable-gpu', '--no-first-run',
                         f'--user-data-dir={d / "profile"}', '--virtual-time-budget=3000',
                         '--dump-dom', out.as_uri() + route],
                        capture_output=True, text=True, encoding='utf-8', timeout=120)
