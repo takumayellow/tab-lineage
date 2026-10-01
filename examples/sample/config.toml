@@ -1,0 +1,37 @@
+# 架空のサンプル (make_sample.py) の設定. 解説サイトの例はこの設定で作る.
+
+[site]
+title = "閲覧の系統樹（サンプル）"
+lede = "架空の学生の 4 日前の夜と今日の履歴から作った例．実験レポートの調べものがエジプト旅行まで脱線している．"
+
+[episodes]
+timezone = "+09:00"   # どこで作っても同じ時刻・同じ回の ID になるように
+
+# ワークスペース. 'host/path' の glob に一致したタブを振り分ける. 上から順に照合する.
+[[workspace]]
+name = "大学"
+match = ["lms.univ.example/*", "numpy.org/*", "matplotlib.org/*", "ja.wikipedia.org/*"]
+
+[[workspace]]
+name = "個人開発"
+match = ["git.example.com/*", "docs.python.org/*", "pypi.org/*", "rich.readthedocs.io/*"]
+
+[[workspace]]
+name = "読みもの"
+match = ["blog.example.org/*"]
+
+[arrange]
+reading_workspaces = ["読みもの"]   # 読みもののタブは開いたままにせず, あとで読むへ回す
+emoji = { "大学" = "🎓", "個人開発" = "🛠", "未分類" = "📥" }
+
+[[arrange.folder]]
+path = "開発/Rust"
+title = "(?i)rust"
+
+[[arrange.folder]]
+path = "開発/Web"
+match = ["developer.mozilla.org/*"]
+
+[[arrange.folder]]
+path = "開発/Python"
+match = ["docs.python.org/*"]

@@ -20,4 +20,7 @@ out/
 arrange*.json
 *.html
 !src/tab_lineage/viewer/index.html
+# 解説サイトの型紙. 例は架空のサンプルだけから作る
+!site/index.html
+_site/
 *.before-*.json

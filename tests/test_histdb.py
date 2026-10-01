@@ -55,3 +55,13 @@ def test_is_intact(tmp_path):
 
 def test_unix_s():
     assert histdb.unix_s(at(0)) == 1_790_000_000
+
+
+def test_reading_releases_the_file(tmp_path):
+    # 接続を閉じ忘れると, Windows では読んだあとのコピーを消せない
+    db = tmp_path / 'History.db'
+    make_history(db, [visit(1, 0, 'https://a.example/')])
+    histdb.load_visits([db])
+    histdb.is_intact(db)
+    db.unlink()
+    assert not db.exists()

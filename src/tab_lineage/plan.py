@@ -9,10 +9,12 @@
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from .episodes import EpisodeConfig, Timeline, thread_members
+from .episodes import LABEL_MAX, EpisodeConfig, Timeline, thread_members
 from .histdb import US
 from .lineage import Graph, LineageConfig
 from .privacy import Privacy, clean_url, host_of, scrub_title
@@ -21,13 +23,45 @@ from .text import clean_title
 
 SHELF = '棚へ（保存して閉じる）'
 UNSORTED = '分類待ち'
+DETOUR = '寄り道: '
+STASH_DAYS = 3  # 最後に見てからこの日数を過ぎたタブを放置とみなす
+# 同じページかを比べるときに無視するクエリ (広告やメールの計測用). ほかのクエリが違えば別のページ
+_TRACKING = re.compile(r'utm_\w+|fbclid|gclid|dclid|msclkid|yclid|igshid|mc_cid|mc_eid|_ga|_gl')
 
 
-def _thread_labels(g: Graph, tl: Timeline) -> dict[int, str]:
+def page_key(url: str) -> str:
+    """重複を見分けるための URL. フラグメントと計測用のクエリだけを落とす.
+
+    ?id=101 と ?id=202 のようにクエリで中身が変わるページを同じページとして閉じないよう,
+    サイトに載せる URL (クエリを全部落とす) とは別に作る.
+    """
+    s = urlsplit(url)
+    query = urlencode([(k, v) for k, v in parse_qsl(s.query, keep_blank_values=True) if not _TRACKING.fullmatch(k)])
+    return urlunsplit((s.scheme, s.netloc.lower(), s.path, query, ''))
+
+
+def _thread_labels(g: Graph, tl: Timeline, labels: dict) -> dict[int, str]:
+    """節 -> 属するスレッドの名前. labels.toml で名前を付けたスレッドはその名前."""
     out: dict[int, str] = {}
     for ep in tl.episodes:
+        named = labels.get(ep.id, {}).get('threads', {})
         for i, k in thread_members(g, ep).items():
-            out[i] = ep.threads[k].label
+            out[i] = named.get(ep.threads[k].id) or ep.threads[k].label
+    return out
+
+
+def _detour_labels(g: Graph, tl: Timeline) -> dict[int, str]:
+    """寄り道の枝の中の節 -> '寄り道: 枝の根の題名'. 寄り道の中の寄り道は内側の枝の名前."""
+    out: dict[int, str] = {}
+    for r in tl.detours:
+        n = g.nodes[r]
+        text = (n.term if n.kind == 'search' and n.term else clean_title(n.title)) or n.host
+        label = DETOUR + (text if len(text) <= LABEL_MAX else text[:LABEL_MAX - 1] + '…')
+        stack = [r]
+        while stack:
+            i = stack.pop()
+            out.setdefault(i, label)
+            stack.extend(k for k in g.nodes[i].kids if k not in tl.detours)
     return out
 
 
@@ -43,13 +77,14 @@ class Placed:
 
 
 def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
-             privacy: Privacy, now_us: int, stash_days: float = 3) -> list[Placed]:
+             privacy: Privacy, now_us: int, stash_days: float = STASH_DAYS, labels: dict | None = None) -> list[Placed]:
+    """labels は labels.toml を読んだもの. 名前を付けたスレッドはその名前を goal にする."""
     last_seen: dict[str, int] = {}
     node_of: dict[str, int] = {}
     for i, n in g.nodes.items():
         if n.t1 >= last_seen.get(n.url, -1):
             last_seen[n.url], node_of[n.url] = n.t1, i
-    labels = _thread_labels(g, tl)
+    goals = _thread_labels(g, tl, labels or {}) | _detour_labels(g, tl)
 
     out: list[Placed] = []
     first_of: dict[str, int] = {}
@@ -62,7 +97,7 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
         # 伏せたタブは lineage と同じく host の URL で節を引く
         url = clean_url(f'{tab.url.split("://", 1)[0]}://{host}/') if masked else clean_url(tab.url, privacy.keep_query)
         title = masked[0] if masked else (clean_title(scrub_title(tab.title)) or host)
-        key = f'{host}\n{title}' if masked else url
+        key = f'{host}\n{title}' if masked else page_key(tab.url)
         if key in first_of:
             status = 'dup'
         elif lcfg.is_search(tab.url):
@@ -72,17 +107,17 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
         else:
             status = 'keep'
         first = first_of.setdefault(key, len(out))
-        goal = labels.get(node_of.get(url, -1)) or host
+        goal = goals.get(node_of.get(url, -1)) or host
         out.append(Placed(tab, title, status, ecfg.workspace_of(tab.url), goal, first))
     return out
 
 
 def build(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
-          privacy: Privacy, now_us: int, stash_days: float = 3) -> dict:
+          privacy: Privacy, now_us: int, stash_days: float = STASH_DAYS, labels: dict | None = None) -> dict:
     rows: list[list[str]] = []
     groups: dict[tuple[str, str], list[list[int]]] = defaultdict(list)
     entries: dict[int, list[int]] = {}
-    for k, p in enumerate(classify(tabs, g, tl, lcfg, ecfg, privacy, now_us, stash_days)):
+    for k, p in enumerate(classify(tabs, g, tl, lcfg, ecfg, privacy, now_us, stash_days, labels)):
         if p.status == 'drop':
             continue
         rows.append([p.title, p.status])

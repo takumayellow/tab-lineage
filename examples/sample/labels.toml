@@ -1,0 +1,19 @@
+# 架空のサンプルの回とスレッドに付けた名前. `tab-lineage outline` に出る ID を見て書く.
+# threads のキーはスレッドの最初の木の根の訪問 ID. arrange では, ここで付けた名前がスタックの名前になる.
+
+[[episode]]
+id = "2026-09-24T21:02"
+title = "夜の読みもの"
+threads = { "1" = "Rust の所有権", "4" = "CSS サブグリッド", "6" = "Python のデスクリプタ" }
+
+[[episode]]
+id = "2026-09-28T13:00"
+title = "実験レポート: 離散フーリエ変換"
+note = "窓関数を調べていたら, フーリエの伝記からピラミッドとエジプト旅行まで脱線した."
+featured = true
+threads = { "10" = "窓関数とレポート", "12" = "numpy.fft の使い方", "25" = "スペクトルの描き方" }
+
+[[episode]]
+id = "2026-09-28T16:10"
+title = "個人開発: tasknote"
+threads = { "30" = "tasknote の Issue #12", "32" = "argparse のサブコマンド", "35" = "rich で表を出す" }

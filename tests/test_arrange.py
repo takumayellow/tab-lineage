@@ -8,7 +8,7 @@ from tab_lineage.plan import Placed
 from tab_lineage.session import Tab
 
 CFG = config._merge(config.default(), {
-    'workspace': [{'name': '大学', 'match': ['letus.example/*']}, {'name': '開発', 'match': ['github.com/*']},
+    'workspace': [{'name': '大学', 'match': ['lms.example/*']}, {'name': '開発', 'match': ['github.com/*']},
                   {'name': '読みもの', 'match': ['blog.example/*']}],
     'arrange': {'emoji': {'大学': '🎓'}, 'reading_workspaces': ['読みもの'],
                 'folder': [{'path': '言語/Python', 'match': ['docs.python.org/*']},
@@ -25,7 +25,7 @@ def test_build_groups_stacks_singles_bookmarks_and_close():
     ps = [placed(0, 'https://github.com/a/b', 'repo', ws='開発', goal='tab-lineage'),
           placed(1, 'https://github.com/a/b/pull/1', 'PR', ws='開発', goal='tab-lineage'),
           placed(2, 'https://github.com/c/d', 'other', ws='開発', goal='c/d'),
-          placed(3, 'https://letus.example/course', '講義', ws='大学', goal='講義'),
+          placed(3, 'https://lms.example/course', '講義', ws='大学', goal='講義'),
           placed(4, 'https://news.example/', 'ニュース'),
           placed(5, 'https://docs.python.org/3/x', 'x', status='stash'),
           placed(6, 'https://blog.example/claude', 'Claude の話', ws='読みもの'),

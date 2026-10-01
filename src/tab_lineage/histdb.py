@@ -1,6 +1,7 @@
 """Chromium 系ブラウザ (Vivaldi / Chrome / Edge / Brave) の History DB を読む."""
 from __future__ import annotations
 
+import contextlib
 import pathlib
 import sqlite3
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ def open_ro(path: str | pathlib.Path) -> sqlite3.Connection:
 def is_intact(path: str | pathlib.Path) -> bool:
     """コピーした DB が壊れていないか確かめる."""
     try:
-        with open_ro(path) as c:
+        with contextlib.closing(open_ro(path)) as c:
             return c.execute('pragma quick_check').fetchone()[0] == 'ok'
     except sqlite3.DatabaseError:
         return False
@@ -52,7 +53,7 @@ def _columns(c: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _read(path: str | pathlib.Path) -> list[Visit]:
-    with open_ro(path) as c:
+    with contextlib.closing(open_ro(path)) as c:
         opener = 'v.opener_visit' if 'opener_visit' in _columns(c, 'visits') else '0'
         has_terms = bool(_columns(c, 'keyword_search_terms'))
         term = ('(select k.term from keyword_search_terms k where k.url_id = u.id limit 1)'

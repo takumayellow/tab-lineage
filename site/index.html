@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>tab-lineage</title>
+<meta name="description" content="閲覧履歴の「どこから開いたか」をたどって，開いたままのタブを Vivaldi のワークスペース・タブスタック・あとで読むへ並べ直すツールの解説．">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: 標本シートの解説書. 広い画面は左に目次, 右に本文 1 列 (最大 820px). 例の図だけ本文より広く取る */
+:root {
+  color-scheme: light;
+  --paper: #f2f5f4;
+  --surface: #ffffff;
+  --sunk: #e7ecea;
+  --ink: #17201d;
+  --muted: #5a6762;
+  --line: #d3dbd8;
+  --accent: #1d5c88;
+  --ws: #2b7a53;
+  --read: #6a54a2;
+  --close: #b03f3c;
+  --amber: #9a6a10;
+  --display: "Shippori Mincho", "Yu Mincho", "Hiragino Mincho ProN", serif;
+  --body: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  --mono: "JetBrains Mono", "Consolas", "Menlo", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #111715; --surface: #18201e; --sunk: #1e2725; --ink: #e2e9e6; --muted: #97a39e; --line: #2c3633;
+    --accent: #7db2da; --ws: #6cc497; --read: #ad9ae0; --close: #e57b74; --amber: #d9a441;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #111715; --surface: #18201e; --sunk: #1e2725; --ink: #e2e9e6; --muted: #97a39e; --line: #2c3633;
+  --accent: #7db2da; --ws: #6cc497; --read: #ad9ae0; --close: #e57b74; --amber: #d9a441;
+}
+
+* { box-sizing: border-box; }
+html { scroll-padding-top: 24px; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--body); font-size: 15px; line-height: 1.8;
+  padding-inline: 20px; padding-block: 0 96px;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+h1, h2, h3, h4 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.4; }
+h1 { font-size: clamp(2rem, 5.2vw, 3rem); font-weight: 800; letter-spacing: .02em; }
+h2 { font-size: 1.65rem; font-weight: 800; }
+h3 { font-size: 1.2rem; font-weight: 600; }
+h4 { font-size: 1.02rem; font-weight: 600; }
+p { margin: 0; }
+code, kbd, pre { font-family: var(--mono); font-size: .86em; }
+code { background: var(--sunk); padding: .08em .35em; border-radius: 3px; }
+kbd {
+  display: inline-block; padding: 0 .45em; border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; background: var(--surface); line-height: 1.6; white-space: nowrap;
+}
+pre {
+  margin: 0; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px;
+  overflow-x: auto; line-height: 1.6; font-size: .82rem;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+.eyebrow { font-family: var(--mono); font-size: .74rem; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+.muted { color: var(--muted); }
+.num, .count { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.page { max-width: 1180px; margin: 0 auto; display: grid; gap: 40px; padding-top: 40px; }
+@media (min-width: 1040px) {
+  .page { grid-template-columns: 196px minmax(0, 1fr); column-gap: 56px; }
+  .page > header, .page > .wide { grid-column: 1 / -1; }
+  nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; }
+}
+main { display: grid; gap: 64px; min-width: 0; }
+main > section { display: grid; gap: 18px; max-width: 820px; min-width: 0; }
+main > section > * { min-width: 0; }
+section p, section li { max-width: 68ch; }
+
+/* 見出し */
+header.head { display: grid; gap: 16px; }
+.lede { font-size: 1.08rem; max-width: 62ch; }
+.links { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: .92rem; }
+.links a.primary {
+  display: inline-block; padding: 6px 14px; border: 1px solid var(--accent); border-radius: 4px; text-decoration: none; font-weight: 500;
+}
+.links a.primary:hover { background: var(--accent); color: var(--paper); }
+
+/* 目次 */
+nav.toc { font-size: .88rem; }
+nav.toc p { font-family: var(--mono); font-size: .72rem; letter-spacing: .12em; color: var(--muted); margin-bottom: 6px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+nav.toc a { color: var(--ink); text-decoration: none; display: block; padding: 2px 0 2px 10px; border-left: 2px solid var(--line); }
+nav.toc a:hover { border-left-color: var(--accent); color: var(--accent); }
+@media (max-width: 1039px) {
+  nav.toc ol { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  nav.toc a { border-left: 0; padding: 0; text-decoration: underline; text-decoration-color: var(--line); }
+}
+
+/* 例の図: 整理前のウィンドウと整理後 */
+.specimen { display: grid; gap: 22px; padding: 22px; background: var(--sunk); border-radius: 6px; }
+.specimen .label { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: .84rem; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--c); }
+.k-ws { --c: var(--ws); }
+.k-read { --c: var(--read); }
+.k-close { --c: var(--close); }
+.windows { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); align-items: start; }
+figure.win { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+figure.win figcaption {
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px; font-size: .8rem; color: var(--muted);
+  border-bottom: 1px solid var(--line); background: var(--paper);
+}
+.lights { width: 34px; height: 8px; background: radial-gradient(circle at 4px 4px, var(--line) 3.5px, transparent 4px) 0 0 / 13px 8px repeat-x; }
+.count { margin-left: auto; font-size: .76rem; color: var(--muted); }
+figure.win ol { list-style: none; margin: 0; padding: 6px 0; }
+li.tab { display: grid; grid-template-columns: 9px minmax(0, 1fr); column-gap: 9px; padding: 3px 12px; font-size: .84rem; line-height: 1.45; }
+li.tab .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); margin-top: .38em; }
+li.tab .tt, li.tab .host { grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+li.tab .host { font-family: var(--mono); font-size: .72rem; color: var(--muted); }
+.arrow { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: .8rem; color: var(--muted); }
+.arrow::before, .arrow::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.after { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); align-items: start; }
+.after > div { display: grid; gap: 14px; align-content: start; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: grid; gap: 10px; min-width: 0; }
+.panel h4, section.ws h4 { display: flex; align-items: baseline; gap: 8px; font-size: .98rem; }
+.panel h4 .count, section.ws h4 .count { margin-left: auto; }
+.panel-k { border-top: 3px solid var(--c); }
+section.ws { background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--ws); border-radius: 6px; padding: 12px 14px; display: grid; gap: 10px; min-width: 0; }
+.stack { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; display: grid; gap: 4px; }
+.stack.detour { border-style: dashed; }
+.sname { display: flex; gap: 8px; align-items: baseline; font-weight: 700; font-size: .86rem; }
+.stack ul, ul.single, .bmtree, .bmtree ul, .closelist { list-style: none; margin: 0; padding: 0; }
+.stack li, ul.single li { font-size: .82rem; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 10px; position: relative; }
+.stack li::before, ul.single li::before { content: ""; position: absolute; left: 0; top: .7em; width: 4px; height: 4px; background: var(--muted); border-radius: 50%; }
+.bmtree, .bmtree ul { font-size: .84rem; line-height: 1.55; }
+.bmtree ul { padding-left: 16px; border-left: 1px solid var(--line); margin-left: 6px; }
+.fname { font-weight: 700; }
+.fname::before { content: "▸ "; color: var(--read); }
+li.bm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.closelist li { font-size: .82rem; line-height: 1.5; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
+.closelist li > :last-child, .closelist li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.why { font-size: .7rem; color: var(--close); border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; align-self: center; }
+
+/* 表 */
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: .86rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-weight: 700; font-size: .78rem; color: var(--muted); background: var(--paper); white-space: nowrap; }
+table.fates { min-width: 760px; }
+table.fates .tt { display: block; }
+table.fates .host { display: block; font-family: var(--mono); font-size: .72rem; color: var(--muted); }
+table.fates .reason { color: var(--muted); }
+.chip { display: inline-block; font-size: .72rem; font-weight: 700; color: var(--c); border: 1px solid currentColor; border-radius: 3px; padding: 0 5px; margin-right: 4px; white-space: nowrap; }
+table.keys td:first-child { white-space: nowrap; }
+
+/* 手順 */
+ol.flow { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; counter-reset: step; }
+ol.flow > li { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 4px 12px; counter-increment: step; }
+ol.flow > li::before {
+  content: counter(step); grid-row: span 3; font-family: var(--display); font-weight: 800; font-size: 1.5rem; line-height: 1.2; color: var(--accent);
+}
+ol.flow h3 { font-family: var(--mono); font-size: 1rem; font-weight: 600; }
+ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+ol.rules { margin: 0; padding-left: 1.6em; display: grid; gap: 6px; }
+ol.rules b { font-weight: 700; }
+.note { border-left: 3px solid var(--amber); padding: 6px 0 6px 14px; color: var(--ink); }
+.note strong { color: var(--amber); }
+dl.ways { margin: 0; display: grid; gap: 12px; }
+dl.ways > div { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); gap: 4px 18px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+dl.ways > div:last-child { border-bottom: 0; padding-bottom: 0; }
+dl.ways dt { font-weight: 700; }
+dl.ways dd { margin: 0; }
+@media (max-width: 600px) {
+  dl.ways > div { grid-template-columns: 1fr; }
+  .specimen { padding: 14px; }
+}
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }
+details > summary { cursor: pointer; padding: 8px 14px; font-weight: 500; }
+details > pre { border: 0; border-top: 1px solid var(--line); border-radius: 0 0 4px 4px; }
+footer { color: var(--muted); font-size: .84rem; display: grid; gap: 4px; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="head">
+  <p class="eyebrow">tab-lineage {{VERSION}}</p>
+  <h1>開いたままのタブを，来た道で片付ける</h1>
+  <p class="lede">tab-lineage は，閲覧履歴に残る「どのページからどのページを開いたか」をたどって，開いたままのタブを Vivaldi のワークスペース・タブスタック・「あとで読む」のブックマークへ並べ直すツール．同じ履歴から，脱線の跡が見える系統樹のサイトも作れる．</p>
+  <div class="links">
+    <a class="primary" href="demo/">サンプルの系統樹を開く</a>
+    <a href="#flow">使い方</a>
+    <a href="#install">導入</a>
+    <a href="https://github.com/takumayellow/tab-lineage">GitHub</a>
+  </div>
+</header>
+
+<section class="wide specimen" id="sample" aria-labelledby="sample-h">
+  <div class="label">
+    <h2 id="sample-h">架空の学生のタブ {{N_TABS}} 枚</h2>
+    <p class="muted">{{N_WINDOWS}} つのウィンドウに混ざって開いている</p>
+  </div>
+  <p>4 日前の夜に技術記事を何本か読みかけて，そのまま開いている．今日の昼は信号処理実験のレポート（離散フーリエ変換）を書きながら NumPy と窓関数を調べ，フーリエの伝記からピラミッドの動画，エジプト旅行の計画まで脱線した．夕方は個人開発の ToDo アプリに戻った．点の色は，整理したあとの行き先．</p>
+  <div class="legend"><span class="k-ws">ワークスペースに残す</span><span class="k-read">あとで読むへ</span><span class="k-close">閉じる</span></div>
+  <div class="windows">{{BEFORE}}</div>
+  <p class="arrow">tab-lineage arrange → apply</p>
+  <div class="after">
+    <div>{{AFTER_WS}}</div>
+    <div>
+      <section class="panel panel-k k-read" aria-label="あとで読む">
+        <h4>ブックマークバー<span class="count">{{N_BOOKMARKS}} 件</span></h4>
+        {{AFTER_BM}}
+      </section>
+      <section class="panel panel-k k-close" aria-label="閉じるタブ">
+        <h4>開き直さないタブ<span class="count">{{N_CLOSE}} 枚</span></h4>
+        <ul class="closelist">{{AFTER_CLOSE}}</ul>
+      </section>
+    </div>
+  </div>
+</section>
+
+<nav class="toc" aria-label="目次">
+  <p>CONTENTS</p>
+  <ol>
+    <li><a href="#fates">1 枚ずつの行き先</a></li>
+    <li><a href="#flow">使い方</a></li>
+    <li><a href="#workspaces">ワークスペース</a></li>
+    <li><a href="#switch">ワークスペースの移り方</a></li>
+    <li><a href="#stacks">タブスタック</a></li>
+    <li><a href="#later">あとで読む</a></li>
+    <li><a href="#close">閉じるタブ</a></li>
+    <li><a href="#lineage">系統樹と寄り道</a></li>
+    <li><a href="#labels">名前を付ける</a></li>
+    <li><a href="#safety">適用するときの安全</a></li>
+    <li><a href="#config">設定</a></li>
+    <li><a href="#privacy">プライバシー</a></li>
+    <li><a href="#install">導入とコマンド</a></li>
+    <li><a href="#limits">制約</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="fates" aria-labelledby="fates-h">
+  <h2 id="fates-h">1 枚ずつの行き先</h2>
+  <p>上の例の全部のタブについて，どこへ行くかとその理由．行き先は 3 通りで，ワークスペースに残すか，ブックマークの「あとで読む」へ移すか，閉じるかのどれか．ワークスペースに残すタブは，同じ話題のものをスタックにまとめる．</p>
+  <div class="scroll">
+    <table class="fates">
+      <thead><tr><th>窓</th><th>タブ</th><th>行き先</th><th>理由</th></tr></thead>
+      <tbody>{{FATES}}</tbody>
+    </table>
+  </div>
+  <p class="muted">「スレッド」は，続けて見たページの木を話題の近さでまとめたもの（<a href="#lineage">系統樹と寄り道</a>）．スレッドの名前は <a href="#labels">labels.toml</a> で付けたもの．</p>
+</section>
+
+<section id="flow" aria-labelledby="flow-h">
+  <h2 id="flow-h">使い方</h2>
+  <p>コピーした履歴から案を作り，確かめてからブラウザへ戻す．案を作るところまではブラウザに触らない．</p>
+  <ol class="flow">
+    <li>
+      <h3>snapshot</h3>
+      <p>使用中のブラウザから履歴（<code>History</code>）と今のタブ（<code>Sessions/Session_*</code>）をコピーする．ブラウザはファイルをロックしているので，解析は必ずコピーに対して行う．</p>
+      <pre><code>tab-lineage snapshot data/2026-09-28</code></pre>
+    </li>
+    <li>
+      <h3>build（任意）</h3>
+      <p>系統樹のサイトを 1 枚の HTML に作って，どこから脱線したかを眺める．<a href="demo/">サンプルから作ったもの</a>．</p>
+      <pre><code>tab-lineage build data/2026-09-28/History.db --session data/2026-09-28/Session_13403000000000000 \
+  --config my.toml --labels labels.toml --out site/index.html</code></pre>
+    </li>
+    <li>
+      <h3>arrange</h3>
+      <p>今のタブを，ワークスペース → スタック → タブと，あとで読むのフォルダの木に分けた案を作り，JSON に書き出す．JSON は手で直してよい（スタックの名前，フォルダ，タブの移動）．サンプルではこう表示される．</p>
+      <pre><code>tab-lineage arrange data/2026-09-28/History.db --session data/2026-09-28/Session_13403000000000000 \
+  --config my.toml --labels labels.toml --out data/arrange.json</code></pre>
+      <details><summary>サンプルの arrange の出力</summary><pre>{{ARRANGE_OUT}}</pre></details>
+    </li>
+    <li>
+      <h3>apply</h3>
+      <p>起動中の Vivaldi に案を適用する．まず <code>--dry-run</code> で木だけ確かめる．タブは <code>--close</code> を付けたときだけ閉じる．Vivaldi の起動のしかたは<a href="#install">導入</a>．</p>
+      <pre><code>tab-lineage apply data/arrange.json --dry-run
+tab-lineage apply data/arrange.json --port 9222
+tab-lineage apply data/arrange.json --port 9222 --close</code></pre>
+    </li>
+  </ol>
+</section>
+
+<section id="workspaces" aria-labelledby="ws-h">
+  <h2 id="ws-h">ワークスペース</h2>
+  <p>ワークスペースは，1 つのウィンドウの中のタブを用途ごとの置き場に分ける Vivaldi の機能．tab-lineage は設定の <code>[[workspace]]</code> に書いた規則でタブを振り分ける．</p>
+  <ul class="plain">
+    <li>タブの URL の <code>host/path</code> を，各ワークスペースの <code>match</code>（glob）と上から順に照合し，最初に当たったワークスペースへ入れる．</li>
+    <li>どれにも当たらないタブは「未分類」へ入れる（名前は <code>[arrange] unsorted</code>）．</li>
+    <li>ワークスペースは設定に書いた順に並べ，未分類を最後に置く．絵文字は <code>[arrange] emoji</code> で付ける．</li>
+    <li>apply は同じ名前のワークスペースがあればそこへ入れ，無ければ作る．既存のワークスペースを消したり名前を変えたりはしない．</li>
+  </ul>
+  <pre><code>[[workspace]]
+name = "大学"
+match = ["lms.univ.example/*", "numpy.org/*", "matplotlib.org/*", "ja.wikipedia.org/*"]
+
+[[workspace]]
+name = "個人開発"
+match = ["git.example.com/*", "docs.python.org/*", "pypi.org/*", "rich.readthedocs.io/*"]</code></pre>
+  <p>これから開くリンクは，Vivaldi の設定「ウェブサイトをワークスペースで自動的に開く」でも振り分けられる．ブラウザの規則は新しく開くタブに効き，tab-lineage はすでに溜まったタブを片付ける，という分担になる．</p>
+
+  <h3 id="switch">ワークスペースの移り方</h3>
+  <p>並べたあとは，ショートカットキーで行き来してもいいし，ワークスペースごとに別のウィンドウで開いたままにしてもいい．どちらも Vivaldi 8.2 で確かめた操作．</p>
+  <dl class="ways">
+    <div><dt>ショートカットで移る</dt><dd><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>2</kbd>〜<kbd>9</kbd> でワークスペース 1〜8 へ切り替える．番号はワークスペースの一覧の並び順．<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd> は，どのワークスペースにも入れていないタブへ戻る（「ウィンドウに切り替え」）．Mac でも <kbd>Control</kbd>+<kbd>Shift</kbd>．</dd></div>
+    <div><dt>次・前へ順に移る</dt><dd>「次のワークスペース」「前のワークスペース」は既定ではキーが無い．設定 → キーボード でキーを割り当てるか，クイックコマンド（<kbd>F2</kbd> または <kbd>Ctrl</kbd>+<kbd>E</kbd>）で名前を打って実行する．</dd></div>
+    <div><dt>一覧から選ぶ</dt><dd>タブバーにあるワークスペースのボタンから一覧を開く．「ワークスペースメニューを表示」にキーを割り当ててもいい．</dd></div>
+    <div><dt>スクロールで移る</dt><dd>設定の「スクロールでワークスペースを切り替える」を有効にすると，マウスのホイールでワークスペースを順に切り替えられる．</dd></div>
+    <div><dt>別のウィンドウで開いておく</dt><dd>ワークスペースの一覧でワークスペースを右クリックし，「新しいウィンドウで開く」．たとえば「大学」と「個人開発」を別々のウィンドウに出したまま並べておける．apply はタブを最後に使ったウィンドウへ集めるので，ウィンドウに分けるのは適用したあとにする．</dd></div>
+  </dl>
+</section>
+
+<section id="stacks" aria-labelledby="stacks-h">
+  <h2 id="stacks-h">タブスタック</h2>
+  <p>同じワークスペースの中で，同じスレッドに属するタブが {{D_MIN_STACK}} 枚以上あれば，1 つのタブスタックにまとめてスレッドの名前を付ける（Vivaldi の「名前をつけたタブスタック」）．1 枚だけのタブはスタックにせず，そのまま並べる．枚数のしきい値は <code>[arrange] min_stack</code>．</p>
+  <ul class="plain">
+    <li><b>スレッド</b>：無操作が {{D_GAP_MINUTES}} 分続くまでの閲覧を 1 回とし，その回の木を題名の近さでまとめたもの．サンプルの昼の回は「窓関数とレポート」「numpy.fft の使い方」「スペクトルの描き方」の 3 つに分かれた．</li>
+    <li><b>名前</b>：<a href="#labels">labels.toml</a> でスレッドに付けた名前．付けていなければ，題名から自動で付けた名前になる．</li>
+    <li><b>寄り道</b>：本筋と話題がほとんど重ならない枝は，「寄り道: 〈枝の最初のページ〉」という別のスタックになる．サンプルでは，窓関数を調べる途中でフーリエの伝記から開いたピラミッドの動画より先が寄り道と判定され，旅行やレシピのページと一緒に未分類のワークスペースへまとまった．</li>
+  </ul>
+  <p>スタックにしたあとは Vivaldi の機能がそのまま使える．スタックを選んで「グリッド状にタイル」（<kbd>Ctrl</kbd>+<kbd>F7</kbd>），「横にタイル」（<kbd>Ctrl</kbd>+<kbd>F8</kbd>），「縦にタイル」（<kbd>Ctrl</kbd>+<kbd>F9</kbd>）で中のタブを並べて見られる．使わないスタックは右クリックの「タブスタックを休止」でメモリを空ける．</p>
+</section>
+
+<section id="later" aria-labelledby="later-h">
+  <h2 id="later-h">あとで読む</h2>
+  <p>開いたまま読まなくなったタブは，閉じる前にブックマークバーの「あとで読む」フォルダへ移す．移すのは次の 2 種類．</p>
+  <ul class="plain">
+    <li><b>放置したタブ</b>：最後に見てから {{D_STASH_DAYS}} 日以上たったタブ．日数は履歴の最後の訪問の時刻から数える．サンプルでは 4 日前の夜に開いた記事が当たる．</li>
+    <li><b>読みもののワークスペースのタブ</b>：<code>[arrange] reading_workspaces</code> に書いたワークスペースへ振り分けたタブは，新しくても開いたままにせず，あとで読むへ回す．サンプルでは「読みもの」．</li>
+  </ul>
+  <p>フォルダは <code>[[arrange.folder]]</code> の規則で分ける．上から順に照合し，最初に当たったフォルダへ入れる．<code>match</code> は URL の glob，<code>title</code> は題名の正規表現（大文字と小文字を区別しない）．どれにも当たらなければ「あとで読む」の直下に入る．</p>
+  <pre><code>[arrange]
+reading_workspaces = ["読みもの"]
+
+[[arrange.folder]]
+path = "開発/Rust"
+title = "(?i)rust"
+
+[[arrange.folder]]
+path = "開発/Web"
+match = ["developer.mozilla.org/*"]</code></pre>
+  <p>apply は同じ名前のフォルダがあればそこへ足し，同じフォルダに同じ URL のブックマークがあれば足さない．何度適用してもブックマークは増えない．ブックマークへ移したタブは，<code>--close</code> を付けたときだけ閉じる．</p>
+</section>
+
+<section id="close" aria-labelledby="close-h">
+  <h2 id="close-h">閉じるタブ</h2>
+  <p>開き直す必要の無いタブは「開き直さない」として案に載せる．閉じるのは apply に <code>--close</code> を付けたときだけで，付けなければ一覧を表示して残す．</p>
+  <div class="scroll">
+    <table class="keys">
+      <thead><tr><th>理由</th><th>判定</th></tr></thead>
+      <tbody>
+        <tr><td>検索結果</td><td>設定の <code>lineage.search</code> に当たる検索結果のページ．調べた先のページは別のタブとして残り，検索語は履歴に残っている．</td></tr>
+        <tr><td>重複</td><td>前にあるタブと同じページ．フラグメント（<code>#</code> 以降）と計測用のクエリ（<code>utm_*</code>・<code>fbclid</code> など）だけを無視して比べる．<code>?id=101</code> と <code>?id=202</code> のようにほかのクエリが違えば別のページとして残す．</td></tr>
+        <tr><td>ログイン・決済など</td><td>設定の <code>privacy.drop</code> に当たる画面．</td></tr>
+        <tr><td>ブラウザの画面</td><td><code>http(s)</code> と <code>file</code> 以外のタブ（<code>vivaldi://settings</code> など）．</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="lineage" aria-labelledby="lineage-h">
+  <h2 id="lineage-h">系統樹と寄り道</h2>
+  <p>スタックの元になるスレッドと寄り道は，履歴から作る木で決まる．<code>build</code> で作るサイトでは，その木と回を見られる．<a href="demo/">サンプルから作ったサイト</a>では，昼の回にエジプト旅行への寄り道が畳まれている．</p>
+  <div class="scroll">
+    <table class="keys">
+      <thead><tr><th>画面</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td>概観</td><td>日 × 24 時間の帯に回を並べる．大きい回と名前を付けた回を上に出す．</td></tr>
+        <tr><td>回の一覧</td><td>語・ワークスペースで絞り込み，新しい順・大きい順などで並べる．</td></tr>
+        <tr><td>回</td><td>スレッドごとのレーンに訪問を時刻で打ち，下に木を出す．寄り道の枝は畳んである．</td></tr>
+        <tr><td>今のタブ</td><td>開いているタブをワークスペース → 目的 → タブの木に並べた整理案．</td></tr>
+        <tr><td>規則</td><td>木と回を作った規則と，その回の集計．</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>木と回を作る規則</h3>
+  <p>上から順に適用する．番号はサイトの「規則」の画面と同じ．</p>
+  <ol class="rules">
+    <li><b>つなぐ</b>：新しいタブで開いた元（opener），無ければ同じタブで来た元（from）を親にする．再読み込みとサブフレームは節にしない．</li>
+    <li><b>同じサイトを畳む</b>：同じタブでの同じサイト内の移動は 1 つの節にする．木の深さはサイトをまたいだ移動だけを表す．</li>
+    <li><b>戻る・重複をまとめる</b>：戻る・進むで同じ URL に戻った訪問と，親が同じで URL か題名が同じ兄弟を 1 つの節にする．</li>
+    <li><b>検索を節にする</b>：検索結果のページは検索語を持つ節として残す．語が違えば別の節．</li>
+    <li><b>検索を親にする</b>：親の記録が無いリンクの訪問は，直前 {{D_SEARCH_WINDOW}} 秒以内の検索の子にする．</li>
+    <li><b>回に区切る</b>：無操作が {{D_GAP_MINUTES}} 分続いたら区切る．</li>
+    <li><b>スレッドに分ける</b>：同じ回の木を，題名の近さ（日本語は文字の 2-gram，英数字は単語で数えた TF-IDF の余弦）か，入口のサイトが同じかでまとめる．</li>
+    <li><b>寄り道を畳む</b>：サイトが変わった所から先の枝のうち，話題が残りとほとんど重ならないものに印を付けて畳む．</li>
+    <li><b>放置に印を付ける</b>：{{D_STALE_HOURS}} 時間以上開いていたページに印を付ける．</li>
+    <li><b>ワークスペースへ振り分ける</b>：訪問を設定の glob で分け，回とスレッドには訪問数の多数決で付ける．最多のワークスペースが訪問の {{D_WS_SHARE}}（<code>ws_share</code>）に届かない回は未分類にする．</li>
+  </ol>
+</section>
+
+<section id="labels" aria-labelledby="labels-h">
+  <h2 id="labels-h">名前を付ける</h2>
+  <p>自動の名前はページの題名から取るので，長かったり的外れだったりする．<code>outline</code> で回とスレッドの ID を見て，<code>labels.toml</code> に名前を書く．スレッドに付けた名前は，そのままスタックの名前になる．</p>
+  <pre><code>tab-lineage outline History.db --config my.toml --labels labels.toml</code></pre>
+  <details><summary>サンプルの outline の出力</summary><pre>{{OUTLINE_OUT}}</pre></details>
+  <p>左端の <code>*</code> は <code>featured</code>（概観で上に出す），<code>-</code> は <code>hide</code> を付けた回．スレッドの ID は，スレッドの最初の木の根になった訪問の ID．</p>
+  <pre><code>{{LABELS}}</code></pre>
+  <p>回には <code>title</code>（名前），<code>note</code>（メモ），<code>featured</code>，<code>hide</code>（サイトに出さない）を書ける．</p>
+</section>
+
+<section id="safety" aria-labelledby="safety-h">
+  <h2 id="safety-h">適用するときの安全</h2>
+  <p>apply は普段使っているブラウザに手を入れるので，元に戻せない操作をしない作りにしてある．</p>
+  <ul class="plain">
+    <li><code>--dry-run</code> は案の木を表示するだけで，ブラウザに接続しない．</li>
+    <li>適用の前に，全部のタブの題名と URL を案の隣の <code>&lt;案&gt;.before-&lt;日時&gt;.json</code> に控える．</li>
+    <li>ワークスペースとブックマークは消さない．足すだけ．</li>
+    <li>開いているタブは開き直さずにそのまま移す．案にあって開いていないページだけ新しく開く．</li>
+    <li>固定したタブは動かさず，閉じない．</li>
+    <li>タブを閉じるのは <code>--close</code> のときだけ．閉じるのは「開き直さない」タブとブックマークへ移したタブで，案に無いタブ（案を作ったあとに開いたタブなど）には触らず，一覧を表示する．</li>
+    <li>1 枚のタブや 1 つのスタックで失敗しても止めずに続け，最後にできなかったものを表示する．</li>
+    <li>適用したあと最初のワークスペースを開き，ほかのワークスペースのタブを休止させてメモリを空ける（<code>--no-hibernate</code> で止める）．</li>
+    <li>案の JSON は手で直せるので，受け付ける URL は <code>http(s)</code> と <code>file:///</code> だけにしてある．人から受け取った案は中身を確かめてから適用する．</li>
+  </ul>
+  <p class="note"><strong>ポートの扱い</strong>　apply は DevTools のポートで Vivaldi に接続する．ポートが開いている間は，この PC のどのプログラムもブラウザを操作でき，Cookie や保存したパスワードも読める．<code>127.0.0.1</code> だけで待ち受けるように起動し，適用が済んだらフラグを付けずに起動し直す．</p>
+</section>
+
+<section id="config" aria-labelledby="config-h">
+  <h2 id="config-h">設定</h2>
+  <p>設定は TOML で，<code>--config</code> で渡したファイルを既定値に重ねる（表は項目ごとに上書きする）．全項目と既定値はリポジトリの <code>src/tab_lineage/data/default.toml</code>．</p>
+  <div class="scroll">
+    <table class="keys">
+      <thead><tr><th>項目</th><th>意味</th><th>既定</th></tr></thead>
+      <tbody>
+        <tr><td><code>[[workspace]]</code></td><td><code>name</code> と <code>match</code>（<code>host/path</code> の glob の並び）．書いた順にワークスペースを並べる．</td><td>なし</td></tr>
+        <tr><td><code>[arrange] reading_workspaces</code></td><td>タブをあとで読むへ回すワークスペース．</td><td><code>[]</code></td></tr>
+        <tr><td><code>[arrange] reading_root</code></td><td>ブックマークバーに作るフォルダの名前．</td><td><code>"{{D_READING_ROOT}}"</code></td></tr>
+        <tr><td><code>[[arrange.folder]]</code></td><td><code>path</code>・<code>match</code>・<code>title</code>．あとで読むの中のフォルダ分け．</td><td>なし</td></tr>
+        <tr><td><code>[arrange] emoji</code></td><td>ワークスペースの絵文字．</td><td><code>{}</code></td></tr>
+        <tr><td><code>[arrange] unsorted</code></td><td>どこにも当たらないタブのワークスペース．</td><td><code>"{{D_UNSORTED}}"</code></td></tr>
+        <tr><td><code>[arrange] min_stack</code></td><td>スタックにする枚数．</td><td><code>{{D_MIN_STACK}}</code></td></tr>
+        <tr><td><code>[episodes] gap_minutes</code></td><td>回を区切る無操作の分数．</td><td><code>{{D_GAP_MINUTES}}</code></td></tr>
+        <tr><td><code>[episodes] timezone</code></td><td>回の ID と時刻の時間帯（<code>"UTC"</code>・<code>"+09:00"</code>・<code>"Asia/Tokyo"</code>）．</td><td>実行した環境</td></tr>
+        <tr><td><code>[lineage] search</code></td><td>検索結果のページの glob．</td><td>主な検索エンジン</td></tr>
+        <tr><td><code>[threads] detour_theta</code></td><td>寄り道とみなす話題の重なりのしきい値．</td><td><code>{{D_DETOUR_THETA}}</code></td></tr>
+        <tr><td><code>[privacy]</code></td><td>消す・伏せるページ（<a href="#privacy">プライバシー</a>）．</td><td>ログイン・メール・地図など</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <details><summary>サンプルの設定（全文）</summary><pre><code>{{CONFIG}}</code></pre></details>
+</section>
+
+<section id="privacy" aria-labelledby="privacy-h">
+  <h2 id="privacy-h">プライバシー</h2>
+  <p>扱うのは閲覧履歴そのもの．<code>build</code> のサイトは公開することもあるので，既定でも次のものは載せない．</p>
+  <ul class="plain">
+    <li>URL のクエリとフラグメント（検索語やセッション ID が入りやすい）．<code>keep_query = true</code> で残す．</li>
+    <li>パスに入ったトークン・文書 ID・共有リンクの ID・メールアドレス．長い英数字の区切りを <code>…</code> に置き換える．</li>
+    <li>ログイン・決済の画面（<code>privacy.drop</code>）．訪問ごと消し，子は親につなぎ直す．</li>
+    <li>メール・DM・地図（<code>privacy.mask</code>）．題名とパスを伏せ，「メール」のような名前だけ残す．地図は店や住所から住んでいる場所が分かるので既定で伏せる．</li>
+    <li>中身の無い中継画面（<code>privacy.drop_titles</code>）．</li>
+    <li>メールアドレス・電話番号らしい数字の並び・URL を含む検索語と，長すぎる検索語（<code>privacy.drop_terms</code> で足せる）．</li>
+    <li>ローカルファイルのパス．ファイル名だけ残す．</li>
+  </ul>
+  <p>一方，<code>arrange</code> の JSON と apply の控えは自分のブラウザへ戻すためのものなので，実際の URL と題名がそのまま入る．リポジトリやサイトに載せない．生の History とセッションファイルも同じ．どれも外部へは送らない．</p>
+  <p>このページの例は，すべて架空のサンプル（<code>examples/sample/make_sample.py</code>）から作った．</p>
+</section>
+
+<section id="install" aria-labelledby="install-h">
+  <h2 id="install-h">導入とコマンド</h2>
+  <p>Python 3.11 以上．依存パッケージは Windows の tzdata（時間帯の表）だけで，apply は websocket-client も使う．</p>
+  <pre><code>pip install "tab-lineage[apply] @ git+https://github.com/takumayellow/tab-lineage"</code></pre>
+  <div class="scroll">
+    <table class="keys">
+      <thead><tr><th>コマンド</th><th>すること</th></tr></thead>
+      <tbody>
+        <tr><td><code>snapshot</code></td><td>使用中のブラウザから History とセッションをコピーする．<code>--browser</code> は vivaldi・chrome・edge・brave．</td></tr>
+        <tr><td><code>outline</code></td><td>回とスレッドの一覧と ID を表示する．</td></tr>
+        <tr><td><code>build</code></td><td>系統樹のサイト（1 枚の HTML）を作る．</td></tr>
+        <tr><td><code>arrange</code></td><td>今のタブの整理案を作る．</td></tr>
+        <tr><td><code>apply</code></td><td>整理案を起動中の Vivaldi に適用する．</td></tr>
+        <tr><td><code>stats</code></td><td>木と回の集計を表示する．</td></tr>
+        <tr><td><code>tabs</code></td><td>セッションファイルのタブを並び順に表示する．</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>apply の前に，DevTools のポートを開けて Vivaldi を起動する．Chromium 136 以降，既定のユーザーデータのフォルダではこのフラグが無視されるので，<code>--user-data-dir</code> で別のフォルダを指定する．</p>
+  <pre><code>vivaldi --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir=&lt;フォルダ&gt;</code></pre>
+</section>
+
+<section id="limits" aria-labelledby="limits-h">
+  <h2 id="limits-h">制約</h2>
+  <ul class="plain">
+    <li>apply は Vivaldi だけ．ワークスペースとタブスタックが Vivaldi の機能なので．系統樹のサイトと整理案は Chrome・Edge・Brave の履歴からも作れる．</li>
+    <li>apply は DevTools のポートを開けて起動したブラウザにしか適用できない．Chromium 136 以降は既定のユーザーデータのフォルダで開けられない．</li>
+    <li>ワークスペースの作成と切り替えは，Vivaldi の画面の内部の関数を探して呼ぶ．版が変わって見つからないときは，ワークスペースを手で作っておけば名前で照合して続ける．</li>
+    <li>前に作ったスタックに適用し直すと，名前は付け直すが，同じスタックに入っている「あとで読む」行き・閉じる側のタブ（<code>--close</code> を付けないとき）と案に無いタブはスタックから出さない（<a href="https://github.com/takumayellow/tab-lineage/issues/3">#3</a>）．</li>
+    <li>リンクを介さずに別の話題へ移った場合，履歴では親子がつながらない．寄り道は話題の重なりで判定するので，言語の違うページが混ざった枝は寄り道と判定されやすい．外れたら JSON を手で直す．</li>
+    <li>POST で検索するエンジン（Startpage など）は検索語が履歴に残らない．</li>
+    <li>ブラウザが書き込み中の最新のセッションファイルは読めないことがあり，そのときは読めるうち一番新しいものを使う．</li>
+  </ul>
+</section>
+
+</main>
+
+<footer class="wide">
+  <p>tab-lineage {{VERSION}} · MIT License</p>
+  <p>例の履歴とタブはすべて架空．<code>*.example</code> のサイトは実在しない．</p>
+</footer>
+
+</div>
+</body>
+</html>

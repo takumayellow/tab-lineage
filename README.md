@@ -10,9 +10,11 @@ Chromium 系ブラウザ（Vivaldi / Chrome / Edge / Brave）の閲覧履歴か�
 
 履歴 DB は読み取り専用で開き，解析はコピーに対して行う．ブラウザに手を入れるのは `apply` だけで，ワークスペースとブックマークは消さない．タブを閉じるのは `--close` を付けたときだけ．
 
+架空のサンプルで整理の前後を示した解説：<https://takumayellow.github.io/tab-lineage/>（`site/build.py` で作り，main への push で GitHub Pages に出す）．
+
 ## 使い方
 
-Python 3.11 以上．依存パッケージは無い（`apply` だけ websocket-client を使う）．
+Python 3.11 以上．依存パッケージは Windows の tzdata（時間帯の表）だけ．`apply` は websocket-client も使う．
 
 ```sh
 pip install git+https://github.com/takumayellow/tab-lineage
