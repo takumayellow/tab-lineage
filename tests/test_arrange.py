@@ -155,23 +155,69 @@ def test_expression_embeds_the_plan_as_json():
     expr = vivaldi.expression(arr, hibernate=False)
     tail = expr[len(vivaldi.JS):]
     assert tail.startswith('(') and json.loads(tail[1:tail.index(', {"hibernate"')]) == arr
-    assert '"hibernate": false' in tail
+    assert '"hibernate": false' in tail and '"close": false' in tail
+    assert '"close": true' in vivaldi.expression(arr, close=True)
 
 
-def test_browser_pages_and_local_files_are_not_reopened():
+def test_apply_close_backs_up_the_tabs_first(tmp_path, monkeypatch, capsys):
+    plan = tmp_path / 'plan.json'
+    plan.write_text(json.dumps({'workspaces': [{'name': 'a', 'items': [{'tabs': [['t', 'https://a.example/']]}]}],
+                                'close': [{'title': 's', 'url': 'https://s.example/', 'why': '検索結果'}]}), encoding='utf-8')
+    calls = []
+    monkeypatch.setattr(vivaldi, 'tabs', lambda port: calls.append('tabs') or [{'id': 1, 'url': 'https://s.example/'}])
+
+    def apply(arr, port, hibernate, close):
+        calls.append(('apply', close))
+        return {'tabs': 1, 'made': 0, 'adopted': 1, 'already': 0, 'kept': 0, 'stacks': 0, 'failed': [], 'created': [],
+                'bookmarks': {'added': 0, 'skipped': 0}, 'closed': 1, 'hibernated': 0, 'switched': True,
+                'left': [['新しいタブ', 'https://new.example/']]}
+    monkeypatch.setattr(vivaldi, 'apply', apply)
+    cli.main(['apply', str(plan), '--close'])
+    assert calls == ['tabs', ('apply', True)]
+    [backup] = tmp_path.glob('plan.before-*.json')
+    assert json.loads(backup.read_text(encoding='utf-8')) == [{'id': 1, 'url': 'https://s.example/'}]
+    out = capsys.readouterr().out
+    assert '閉じた 1 枚' in out and '閉じなかったタブ 1 枚' in out and 'https://new.example/' in out
+
+
+def test_apply_without_close_also_backs_up_and_lists_what_it_left(tmp_path, monkeypatch, capsys):
+    plan = tmp_path / 'plan.json'
+    plan.write_text(json.dumps({'workspaces': []}), encoding='utf-8')
+    monkeypatch.setattr(vivaldi, 'tabs', lambda port: [])
+    monkeypatch.setattr(vivaldi, 'apply', lambda arr, port, hibernate, close: {
+        'tabs': 0, 'made': 0, 'adopted': 0, 'already': 0, 'kept': 1, 'stacks': 0, 'created': [], 'closed': 0,
+        'failed': ['a/b: スタックを作れない'], 'bookmarks': {'added': 0, 'skipped': 0}, 'hibernated': 0,
+        'switched': True, 'left': [['固定', 'https://pin.example/']]})
+    cli.main(['apply', str(plan)])
+    assert len(list(tmp_path.glob('plan.before-*.json'))) == 1
+    out = capsys.readouterr().out
+    assert '固定したタブのまま 1 枚' in out and 'できなかった: a/b' in out and '残したタブ 1 枚 (閉じるなら --close)' in out
+
+
+def test_browser_pages_are_closed_and_local_files_kept():
     ps = [placed(0, 'vivaldi://settings', '設定'), placed(1, 'file:///C:/a.pdf', 'a.pdf', status='stash'),
-          placed(2, 'https://a.example/', 'a')]
+          placed(2, 'https://a.example/', 'a'), placed(3, 'chrome://newtab/', '')]
     arr = arrange.build(ps, ACFG)
-    assert [c['url'] for c in arr['close']] == ['vivaldi://settings', 'file:///C:/a.pdf']
-    assert arr['bookmarks']['links'] == []
+    assert [c['url'] for c in arr['close']] == ['vivaldi://settings', 'chrome://newtab/']
+    assert {c['why'] for c in arr['close']} == {'ブラウザの画面'}
+    assert arr['bookmarks']['links'] == [['a.pdf', 'file:///C:/a.pdf']]
 
 
-@pytest.mark.parametrize('url', ['javascript:alert(1)', 'file:///C:/x', 'chrome://settings'])
-def test_validate_accepts_only_web_urls(url):
+@pytest.mark.parametrize('url', ['javascript:alert(1)', 'data:text/html,x', 'chrome://settings', 'file://host/share/x'])
+def test_validate_accepts_only_web_urls_and_local_files(url):
     with pytest.raises(ValueError, match='http'):
         arrange.validate({'workspaces': [{'name': 'a', 'items': [{'tabs': [['t', url]]}]}]})
     with pytest.raises(ValueError, match='http'):
         arrange.validate({'workspaces': [], 'bookmarks': {'title': 'r', 'links': [['t', url]]}})
+
+
+def test_validate_accepts_a_local_file_and_checks_the_close_list():
+    ok = {'workspaces': [{'name': 'a', 'items': [{'tabs': [['t', 'file:///C:/r.html']]}]}],
+          'close': [{'title': 's', 'url': 'chrome://newtab/', 'why': 'ブラウザの画面'}]}
+    assert arrange.validate(ok) is ok
+    for close in ({'url': 'x'}, [{'title': 's'}], [{'url': 1}]):
+        with pytest.raises(ValueError, match='close'):
+            arrange.validate({**ok, 'close': close})
 
 
 def test_ui_page_refuses_a_socket_elsewhere(monkeypatch):

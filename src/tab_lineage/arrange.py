@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from .plan import Placed
 from .privacy import site_key
 
-WHY = {'serp': '検索結果', 'dup': '重複', 'drop': 'ログイン・決済など', 'local': 'ブラウザの画面・ローカルファイル'}
-# apply で開くのは web のページだけ. javascript: のブックマークや file: のタブを作らない
-SCHEMES = ('http://', 'https://')
+WHY = {'serp': '検索結果', 'dup': '重複', 'drop': 'ログイン・決済など', 'local': 'ブラウザの画面'}
+# apply で開くのは web のページと手元のファイルだけ. javascript: や data: のタブ・ブックマークを作らない
+SCHEMES = ('http://', 'https://', 'file:///')
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ def _check_folder(node, parent: str) -> None:
     for c in node.get('children', []):
         _check_folder(c, where)
     if not all(_is_link(x) for x in node.get('links', [])):
-        raise ValueError(f'{where}: links は [題名, http(s) の URL] の並び')
+        raise ValueError(f'{where}: links は [題名, http(s) か file の URL] の並び')
 
 
 def validate(arr: dict) -> dict:
@@ -137,11 +137,14 @@ def validate(arr: dict) -> dict:
             if not isinstance(item, dict) or not isinstance(item.get('tabs'), list) or not item['tabs']:
                 raise ValueError(f'{where}: tabs が空')
             if not all(_is_link(x) for x in item['tabs']):
-                raise ValueError(f'{where}: tabs は [題名, http(s) の URL] の並び')
+                raise ValueError(f'{where}: tabs は [題名, http(s) か file の URL] の並び')
             if item.get('stack') is not None and not isinstance(item['stack'], str):
                 raise ValueError(f'{where}: stack は文字列か null')
     if arr.get('bookmarks') is not None:
         _check_folder(arr['bookmarks'], 'bookmarks')
+    close = arr.get('close', [])
+    if not isinstance(close, list) or not all(isinstance(c, dict) and isinstance(c.get('url'), str) for c in close):
+        raise ValueError('close は url を持つ項目の並び')
     return arr
 
 
