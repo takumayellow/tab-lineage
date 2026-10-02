@@ -21,6 +21,7 @@ class Analysis:
     ecfg: episodes.EpisodeConfig
     privacy: Privacy
     last_visit: int
+    visits: list[histdb.Visit]
 
 
 def analyze(dbs: list[str], config_path: str | None) -> Analysis:
@@ -36,7 +37,7 @@ def analyze(dbs: list[str], config_path: str | None) -> Analysis:
         tz = episodes.parse_tz(cfg.get('episodes', {}).get('timezone'))
     except ValueError as e:
         raise SystemExit(str(e))
-    return Analysis(cfg, g, episodes.build(g, ecfg, tz), lcfg, ecfg, privacy, visits[-1].t)
+    return Analysis(cfg, g, episodes.build(g, ecfg, tz), lcfg, ecfg, privacy, visits[-1].t, visits)
 
 
 def _fmt_span(ep: episodes.Episode) -> str:
@@ -90,9 +91,11 @@ def cmd_build(a) -> None:
 
 def cmd_arrange(a) -> None:
     r = analyze(a.db, a.config)
+    acfg = arrange.ArrangeConfig.from_config(r.cfg)
     placed = plan.classify(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
-                           labels=config.load_labels(a.labels))
-    arr = arrange.build(placed, arrange.ArrangeConfig.from_config(r.cfg))
+                           labels=config.load_labels(a.labels),
+                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy))
+    arr = arrange.build(placed, acfg)
     print(arrange.outline(arr))
     if a.out:
         out = pathlib.Path(a.out)
