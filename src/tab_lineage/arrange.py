@@ -13,7 +13,7 @@ import fnmatch
 import re
 from dataclasses import dataclass
 
-from .plan import Placed
+from .plan import Anchor, Placed
 from .privacy import site_key
 
 WHY = {'serp': '検索結果', 'dup': '重複', 'drop': 'ログイン・決済など', 'local': 'ブラウザの画面'}
@@ -40,6 +40,7 @@ class ArrangeConfig:
     reading_root: str = 'あとで読む'
     reading_workspaces: tuple[str, ...] = ()    # このワークスペースのタブはブックマークへ回す
     folders: tuple[Folder, ...] = ()
+    anchors: tuple[Anchor, ...] = ()        # このページから開いたタブを, ページの名前のスタックにまとめる
     unsorted: str = '未分類'
     min_stack: int = 2
 
@@ -50,12 +51,15 @@ class ArrangeConfig:
             Folder(tuple(x for x in f['path'].split('/') if x), tuple(f.get('match', ())),
                    re.compile(f['title'], re.I) if f.get('title') else None)
             for f in a.get('folder', ()))
+        anchors = tuple(Anchor(tuple(x.get('match', ())), re.compile(x['name']) if x.get('name') else None)
+                        for x in a.get('anchor', ()))
         return cls(
             order=tuple(w['name'] for w in cfg.get('workspace', ())),
             emoji=tuple(a.get('emoji', {}).items()),
             reading_root=a.get('reading_root', 'あとで読む'),
             reading_workspaces=tuple(a.get('reading_workspaces', ())),
             folders=folders,
+            anchors=anchors,
             unsorted=a.get('unsorted', '未分類'),
             min_stack=max(2, int(a.get('min_stack', 2))),
         )

@@ -1,10 +1,13 @@
 import json
+import re
 import struct
 
 import pytest
 from _util import make_history, nav, record, snss, visit
-from tab_lineage import arrange, cli, config, vivaldi
+from tab_lineage import arrange, cli, config, plan, vivaldi
+from tab_lineage.histdb import Visit
 from tab_lineage.plan import Placed
+from tab_lineage.privacy import Privacy
 from tab_lineage.session import Tab
 
 CFG = config._merge(config.default(), {
@@ -281,3 +284,48 @@ def test_move_expression_embeds_root_and_moves_as_json():
     moves = [{'id': '1', 'path': ['</script>"\u2028']}]
     expr = vivaldi.move_expression('後で', moves)
     assert expr == f'{vivaldi.MOVE}({json.dumps("後で")}, {json.dumps(moves)})' and '\u2028' not in expr
+
+
+def test_cli_arrange_stacks_tabs_under_the_anchor_page_they_came_from(tmp_path):
+    db = tmp_path / 'History.db'
+    make_history(db, [
+        visit(1, 0, 'https://lms.example.edu/', 'Home | LMS', core=1),
+        visit(2, 10, 'https://lms.example.edu/course/view.php?id=1', 'コース: 線形代数 (A1) | LMS', opener=1),
+        visit(3, 20, 'https://lms.example.edu/course/view.php?id=2', 'コース: 情報理論 (B2) | LMS', opener=1),
+        visit(4, 30, 'https://lms.example.edu/mod/resource/view.php?id=7', '第1回 資料', opener=2),
+        visit(5, 40, 'https://lms.example.edu/pluginfile.php/7/slide.pdf', 'slide.pdf', opener=4),
+        visit(6, 50, 'https://lms.example.edu/mod/assign/view.php?id=8', '第1回 課題', opener=3),
+        visit(7, 60, 'https://lms.example.edu/mod/quiz/view.php?id=9', '小テスト', opener=3),
+    ])
+    sess = tmp_path / 'Session_1'
+    sess.write_bytes(snss(*(nav(t, 0, u, '') for t, u in enumerate([
+        'https://lms.example.edu/course/view.php?id=1', 'https://lms.example.edu/pluginfile.php/7/slide.pdf',
+        'https://lms.example.edu/mod/assign/view.php?id=8', 'https://lms.example.edu/mod/quiz/view.php?id=9'], 1))))
+    cfg = tmp_path / 'c.toml'
+    cfg.write_text('[[arrange.anchor]]\nmatch = ["lms.example.edu/course/view.php"]\n'
+                   r"name = '^コース: (.+?) \('" '\n', encoding='utf-8')
+    out = tmp_path / 'arrange.json'
+    cli.main(['arrange', str(db), '--session', str(sess), '--config', str(cfg), '--out', str(out)])
+    items = json.loads(out.read_text(encoding='utf-8'))['workspaces'][0]['items']
+    assert [(i['stack'], [u.rsplit('/', 1)[-1] for _, u in i['tabs']]) for i in items] == [
+        ('線形代数', ['view.php?id=1', 'slide.pdf']), ('情報理論', ['view.php?id=8', 'view.php?id=9'])]
+
+
+def test_anchor_name_falls_back_to_the_title_without_the_site_name():
+    a = arrange.ArrangeConfig.from_config({'arrange': {'anchor': [{'match': ['x.example/c/*'], 'name': '^nomatch(.)'}]}})
+    assert a.anchors[0].label('https://x.example/c/1?id=3', 'Algebra notes - Example') == 'Algebra notes'
+    assert a.anchors[0].label('https://x.example/d/1', 'Algebra notes - Example') is None
+
+
+def test_anchor_labels_follow_the_raw_visits_keep_names_over_restored_tabs_and_skip_hidden_pages():
+    anchors = (plan.Anchor(('x.example/c/*',), re.compile(r'^Course (\w+)')),)
+    privacy = Privacy.from_config({'mask': {'x.example/c/secret': '伏せた'}, 'drop': ['bank.example/*']})
+    visits = [Visit(1, 0, 'https://x.example/c/1?id=1', 'Course Algebra', 1, False, 0, 0, 0),
+              Visit(2, 1, 'https://x.example/f.pdf#p2', 'f.pdf', 1, False, 1, 0, 0),
+              Visit(3, 2, 'https://x.example/c/secret', 'Course Hidden', 1, False, 0, 0, 0),
+              Visit(4, 3, 'https://x.example/g', 'g', 1, False, 3, 0, 0),
+              Visit(5, 4, 'https://bank.example/a', 'Course Money', 1, False, 0, 0, 0),
+              Visit(6, 5, 'https://x.example/h', 'h', 1, False, 0, 2, 0),
+              Visit(7, 6, 'https://x.example/f.pdf', 'f.pdf', 1, False, 0, 0, 0)]
+    assert plan.anchor_labels(visits, anchors, privacy) == {
+        'https://x.example/c/1?id=1': 'Algebra', 'https://x.example/f.pdf': 'Algebra', 'https://x.example/h': 'Algebra'}

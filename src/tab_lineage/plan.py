@@ -9,15 +9,16 @@
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .episodes import LABEL_MAX, EpisodeConfig, Timeline, thread_members
-from .histdb import US
+from .histdb import US, Visit
 from .lineage import Graph, LineageConfig
-from .privacy import Privacy, clean_url, host_of, scrub_title
+from .privacy import Privacy, clean_url, host_of, scrub_title, site_key
 from .session import Tab
 from .text import clean_title
 
@@ -76,6 +77,44 @@ def _detour_labels(g: Graph, tl: Timeline) -> dict[int, str]:
 
 
 @dataclass(frozen=True)
+class Anchor:
+    """このページから (たどって) 開いたタブを, このページの名前のスタックにまとめる. 授業のコースのページなど."""
+    match: tuple[str, ...]              # 'host/path' の glob
+    name: re.Pattern | None = None      # 題名から名前を取り出す正規表現 (最初のグループ, 無ければ全体)
+
+    def label(self, url: str, title: str) -> str | None:
+        if not any(fnmatch.fnmatchcase(site_key(url), p) for p in self.match):
+            return None
+        title = ' '.join(scrub_title(title).split())
+        m = self.name.search(title) if self.name else None
+        got = (m.group(1) if m.groups() else m.group(0)) if m else clean_title(title)
+        return (got or '').strip()[:LABEL_MAX] or None
+
+
+def anchor_labels(visits: list[Visit], anchors: tuple[Anchor, ...], privacy: Privacy) -> dict[str, str]:
+    """page_key -> その URL の訪問から, 開いた元 (opener, 無ければ同じタブの前) をたどって最初に当たった Anchor の名前.
+
+    系統樹は同じサイトの中の移動を畳み, クエリだけ違うページを 1 節にまとめるので, 生の訪問でたどる.
+    同じ URL を何度も訪れたら, 名前の付いた最後の訪問の名前にする (再起動で戻したタブは開いた元が無いので名前を消さない).
+    伏せる・除くページは名前に使わず, そこでたどるのも止める.
+    """
+    if not anchors:
+        return {}
+    by_visit: dict[int, str | None] = {}
+    out: dict[str, str] = {}
+    for v in sorted(visits, key=lambda v: (v.t, v.id)):
+        if privacy.dropped(v.url, v.title) or privacy.mask_of(v.url):
+            by_visit[v.id] = None
+            continue
+        own = next((x for a in anchors if (x := a.label(v.url, v.title))), None)
+        got = own or by_visit.get(v.opener or v.frm)
+        by_visit[v.id] = got
+        if got:
+            out[page_key(v.url)] = got
+    return out
+
+
+@dataclass(frozen=True)
 class Placed:
     """1 枚のタブの分類. status は keep / dup / serp / stash と, プライバシーの設定で消す drop."""
     tab: Tab
@@ -87,8 +126,10 @@ class Placed:
 
 
 def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
-             privacy: Privacy, now_us: int, stash_days: float = STASH_DAYS, labels: dict | None = None) -> list[Placed]:
-    """labels は labels.toml を読んだもの. 名前を付けたスレッドはその名前を goal にする."""
+             privacy: Privacy, now_us: int, stash_days: float = STASH_DAYS, labels: dict | None = None,
+             anchored: dict[str, str] | None = None) -> list[Placed]:
+    """labels は labels.toml を読んだもの. 名前を付けたスレッドはその名前を goal にする.
+    anchored は anchor_labels の結果. 当たったタブはスレッドより先にその名前を goal にする."""
     last_seen: dict[str, int] = {}
     node_of: dict[str, int] = {}
     for i, n in g.nodes.items():
@@ -120,7 +161,7 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
         else:
             status = 'keep'
         first = first_of.setdefault(key, len(out))
-        goal = goals.get(node_of.get(url, -1)) or host
+        goal = (None if masked else (anchored or {}).get(page_key(tab.url))) or goals.get(node_of.get(url, -1)) or host
         # URL の規則に当たらないタブは, 開いた流れ (スレッド, 無ければ回) のワークスペースに入れる
         workspace = ecfg.workspace_of(tab.url) or spaces.get(node_of.get(url, -1))
         out.append(Placed(tab, title, status, workspace, goal, first))
