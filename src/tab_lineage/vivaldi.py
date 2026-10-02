@@ -269,3 +269,56 @@ def expression(arr: dict, hibernate: bool = True, settle_ms: int = 4000, close: 
 
 def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = False) -> dict:
     return evaluate(ui_page(port), expression(arr, hibernate, close=close))
+
+
+# ブックマークバーの root のフォルダの直下にあるリンク
+READING = r'''(async root => {
+  const bar = (await chrome.bookmarks.getTree())[0].children[0];
+  const f = (await chrome.bookmarks.getChildren(bar.id)).find(c => !c.url && c.title === root);
+  if (!f) return [];
+  return (await chrome.bookmarks.getChildren(f.id)).filter(c => c.url).map(c => ({id: c.id, title: c.title, url: c.url}));
+})'''
+
+# root の直下のリンクを, root の下のフォルダ (無ければ作る) へ移す. 移す先に同じ URL があれば移さない
+MOVE = r'''
+(async (root, moves) => {
+  const bar = (await chrome.bookmarks.getTree())[0].children[0];
+  const folder = async (parentId, title) =>
+    (await chrome.bookmarks.getChildren(parentId)).find(c => !c.url && c.title === title) ||
+    await chrome.bookmarks.create({parentId, title});
+  const top = await folder(bar.id, root);
+  let moved = 0;
+  const skipped = [];
+  for (const m of moves) {
+    try {
+      const [node] = await chrome.bookmarks.get(m.id);
+      if (!node || node.parentId !== top.id) { skipped.push(`${m.title}: 直下に無い`); continue; }
+      let parentId = top.id;
+      for (const name of m.path) parentId = (await folder(parentId, name)).id;
+      if ((await chrome.bookmarks.getChildren(parentId)).some(c => c.url === node.url)) {
+        skipped.push(`${m.title}: 移す先に同じ URL がある`);
+        continue;
+      }
+      await chrome.bookmarks.move(m.id, {parentId});
+      moved++;
+    } catch (e) {
+      skipped.push(`${m.title}: ${e.message || e}`);
+    }
+  }
+  return {moved, skipped};
+})'''
+
+
+def reading_links(port: int, root: str) -> list[dict]:
+    """ブックマークバーの root のフォルダの直下にあるリンク ({id, title, url})."""
+    return evaluate(ui_page(port), f'{READING}({json.dumps(root)})', timeout=30)
+
+
+def move_expression(root: str, moves: list[dict]) -> str:
+    # expression と同じく, 既定の ensure_ascii で題名の U+2028 なども式を切らないエスケープにする
+    return f'{MOVE}({json.dumps(root)}, {json.dumps(moves)})'
+
+
+def move(port: int, root: str, moves: list[dict]) -> dict:
+    """moves ({id, title, path}) のリンクを root/path のフォルダへ移す. {moved, skipped} を返す."""
+    return evaluate(ui_page(port), move_expression(root, moves), timeout=60)

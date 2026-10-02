@@ -101,6 +101,22 @@ def cmd_arrange(a) -> None:
         print(f'{out}: 手で直してから apply に渡せる')
 
 
+def cmd_refile(a) -> None:
+    from . import vivaldi
+    acfg = arrange.ArrangeConfig.from_config(config.load(a.config))
+    links = vivaldi.reading_links(a.port, acfg.reading_root)
+    moves = arrange.refile_moves(links, acfg)
+    for m in moves:
+        print(f'{"/".join([acfg.reading_root, *m["path"]])} <- {m["title"]}')
+    if a.dry_run or not moves:
+        print(f'振り分ける {len(moves)} 件 (直下に残す {len(links) - len(moves)} 件)')
+        return
+    res = vivaldi.move(a.port, acfg.reading_root, moves)
+    print(f'振り分けた {res["moved"]} 件 (直下に残した {len(links) - res["moved"]} 件)')
+    for s in res['skipped']:
+        print(f'移さなかった: {s}')
+
+
 def cmd_apply(a) -> None:
     try:
         arr = arrange.validate(json.loads(pathlib.Path(a.plan).read_text(encoding='utf-8')))
@@ -187,6 +203,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--close', action='store_true',
                    help='閉じる案のタブとブックマークに入れたタブを閉じる')
     p.set_defaults(func=cmd_apply)
+
+    p = sub.add_parser('refile', help='あとで読むの直下のブックマークを, 設定のフォルダの規則で振り分け直す')
+    p.add_argument('--config', help='設定の TOML (既定値に重ねる)')
+    p.add_argument('--port', type=int, default=9222, help='Vivaldi の --remote-debugging-port')
+    p.add_argument('--dry-run', action='store_true', help='移す先を表示するだけで移さない')
+    p.set_defaults(func=cmd_refile)
 
     p = sub.add_parser('tabs', help='セッションファイルの開いているタブを並び順に表示する')
     p.add_argument('session')
