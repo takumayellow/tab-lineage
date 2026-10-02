@@ -103,6 +103,11 @@ def build(placed: list[Placed], cfg: ArrangeConfig) -> dict:
     return {'workspaces': workspaces, 'bookmarks': bookmarks, 'close': close}
 
 
+def refile_moves(links: list[dict], cfg: ArrangeConfig) -> list[dict]:
+    """あとで読むの直下にあるリンク ({id, title, url}) のうち, フォルダの規則に当たるものと移す先 (path)."""
+    return [{**link, 'path': list(path)} for link in links if (path := cfg.folder_of(link['url'], link['title']))]
+
+
 def _is_web(url: str) -> bool:
     return url.lower().startswith(SCHEMES)
 

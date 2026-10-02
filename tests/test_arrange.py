@@ -237,3 +237,47 @@ def test_expression_escapes_line_separators():
 def test_validate_checks_each_workspace(w, msg):
     with pytest.raises(ValueError, match=msg):
         arrange.validate({'workspaces': [w]})
+
+
+def test_refile_moves_only_links_a_folder_rule_hits():
+    links = [{'id': '1', 'title': 'Claude の使い方', 'url': 'https://blog.example/claude'},
+             {'id': '2', 'title': 'どこにも当たらない', 'url': 'https://other.example/'},
+             {'id': '3', 'title': 'tutorial', 'url': 'https://docs.python.org/3/tutorial/'}]
+    assert arrange.refile_moves(links, ACFG) == [
+        {'id': '1', 'title': 'Claude の使い方', 'url': 'https://blog.example/claude', 'path': ['AI']},
+        {'id': '3', 'title': 'tutorial', 'url': 'https://docs.python.org/3/tutorial/', 'path': ['言語', 'Python']}]
+
+
+def write_config(tmp_path):
+    path = tmp_path / 'config.toml'
+    path.write_text('[arrange]\nreading_root = "後で"\n[[arrange.folder]]\npath = "AI"\ntitle = "claude"\n',
+                    encoding='utf-8')
+    return path
+
+
+def test_cli_refile_dry_run_shows_the_moves_without_moving(tmp_path, monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: seen.append((port, root)) or [
+        {'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c'}])
+    monkeypatch.setattr(vivaldi, 'move', lambda *a: pytest.fail('dry-run で移した'))
+    cli.main(['refile', '--config', str(write_config(tmp_path)), '--port', '9300', '--dry-run'])
+    assert seen == [(9300, '後で')]
+    assert '後で/AI <- Claude Code 入門' in capsys.readouterr().out
+
+
+def test_cli_refile_moves_and_reports(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: [
+        {'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c'},
+        {'id': '8', 'title': 'そのまま', 'url': 'https://other.example/'}])
+    calls = []
+    monkeypatch.setattr(vivaldi, 'move', lambda port, root, moves: calls.append((root, moves)) or
+                        {'moved': 1, 'skipped': []})
+    cli.main(['refile', '--config', str(write_config(tmp_path))])
+    assert calls == [('後で', [{'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c', 'path': ['AI']}])]
+    assert '振り分けた 1 件 (直下に残した 1 件)' in capsys.readouterr().out
+
+
+def test_move_expression_embeds_root_and_moves_as_json():
+    moves = [{'id': '1', 'path': ['</script>"\u2028']}]
+    expr = vivaldi.move_expression('後で', moves)
+    assert expr == f'{vivaldi.MOVE}({json.dumps("後で")}, {json.dumps(moves)})' and '\u2028' not in expr
