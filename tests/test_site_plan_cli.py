@@ -1,3 +1,4 @@
+import dataclasses
 import datetime as dt
 import json
 import re
@@ -172,3 +173,21 @@ def test_parse_timezone():
     for bad in ('+09:60', '+24:00'):
         with pytest.raises(ValueError, match='読めない'):
             episodes.parse_tz(bad)
+
+
+COURSE = [
+    visit(1, 0, 'https://lms.example/course', 'ネットワーク', core=1),
+    visit(2, 10, 'https://lms.example/quiz', '小テスト', opener=1),
+    visit(3, 20, 'https://www.bing.com/search?q=arp', 'arp - Search', opener=2, term='arp'),
+    visit(4, 30, 'https://arp.example/', 'ARP とは', opener=3),
+    visit(5, 100_000, 'https://other.example/', 'ほかのこと', core=1),
+]
+
+
+def test_a_tab_without_a_rule_takes_the_workspace_of_its_thread():
+    ecfg = dataclasses.replace(ECFG, workspaces=(('大学', ('lms.example/*',)),))
+    g = lineage.build(COURSE, LCFG, PRIVACY)
+    tl = episodes.build(g, ecfg, UTC)
+    tabs = [Tab(1, 'https://arp.example/', 'ARP とは'), Tab(2, 'https://other.example/', 'ほかのこと')]
+    ws = [p.workspace for p in plan.classify(tabs, g, tl, LCFG, ecfg, PRIVACY, now_us=at(100_010))]
+    assert ws == ['大学', None]

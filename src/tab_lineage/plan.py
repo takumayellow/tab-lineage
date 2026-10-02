@@ -50,6 +50,16 @@ def _thread_labels(g: Graph, tl: Timeline, labels: dict) -> dict[int, str]:
     return out
 
 
+def _thread_workspaces(g: Graph, tl: Timeline) -> dict[int, str]:
+    """節 -> 属するスレッドのワークスペース. スレッドで決まらなければ回のワークスペース."""
+    out: dict[int, str] = {}
+    for ep in tl.episodes:
+        for i, k in thread_members(g, ep).items():
+            if ws := ep.threads[k].workspace or ep.workspace:
+                out[i] = ws
+    return out
+
+
 def _detour_labels(g: Graph, tl: Timeline) -> dict[int, str]:
     """寄り道の枝の中の節 -> '寄り道: 枝の根の題名'. 寄り道の中の寄り道は内側の枝の名前."""
     out: dict[int, str] = {}
@@ -84,7 +94,10 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
     for i, n in g.nodes.items():
         if n.t1 >= last_seen.get(n.url, -1):
             last_seen[n.url], node_of[n.url] = n.t1, i
-    goals = _thread_labels(g, tl, labels or {}) | _detour_labels(g, tl)
+    detours = _detour_labels(g, tl)
+    goals = _thread_labels(g, tl, labels or {}) | detours
+    # 寄り道の枝は流れから外れているので, ワークスペースを引き継がない
+    spaces = {i: w for i, w in _thread_workspaces(g, tl).items() if i not in detours}
 
     out: list[Placed] = []
     first_of: dict[str, int] = {}
@@ -108,7 +121,9 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
             status = 'keep'
         first = first_of.setdefault(key, len(out))
         goal = goals.get(node_of.get(url, -1)) or host
-        out.append(Placed(tab, title, status, ecfg.workspace_of(tab.url), goal, first))
+        # URL の規則に当たらないタブは, 開いた流れ (スレッド, 無ければ回) のワークスペースに入れる
+        workspace = ecfg.workspace_of(tab.url) or spaces.get(node_of.get(url, -1))
+        out.append(Placed(tab, title, status, workspace, goal, first))
     return out
 
 
