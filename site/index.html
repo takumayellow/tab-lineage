@@ -163,8 +163,9 @@ table.keys td:first-child { white-space: nowrap; }
 ol.flow { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; counter-reset: step; }
 ol.flow > li { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 4px 12px; counter-increment: step; }
 ol.flow > li::before {
-  content: counter(step); grid-row: span 3; font-family: var(--display); font-weight: 800; font-size: 1.5rem; line-height: 1.2; color: var(--accent);
+  content: counter(step); grid-column: 1; grid-row: 1; font-family: var(--display); font-weight: 800; font-size: 1.5rem; line-height: 1.2; color: var(--accent);
 }
+ol.flow > li > * { grid-column: 2; }
 ol.flow h3 { font-family: var(--mono); font-size: 1rem; font-weight: 600; }
 ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
 ol.rules { margin: 0; padding-left: 1.6em; display: grid; gap: 6px; }
