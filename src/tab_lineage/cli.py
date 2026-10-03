@@ -134,20 +134,44 @@ def cmd_apply(a) -> None:
     backup.write_text(json.dumps(vivaldi.tabs(a.port), ensure_ascii=False, indent=1), encoding='utf-8')
     print(f'{backup}: 適用する前のタブの控え')
     res = vivaldi.apply(arr, port=a.port, hibernate=not a.no_hibernate, close=a.close)
-    print(f'タブ {res["tabs"]} 枚 (開いていたのを移した {res["adopted"]} 枚, 元の場所のまま {res["already"]} 枚, '
-          f'新しく開いた {res["made"]} 枚, 固定したタブのまま {res["kept"]} 枚), スタック {res["stacks"]} 個, ブックマーク {res["bookmarks"]["added"]} 件 '
-          f'(既にあった {res["bookmarks"]["skipped"]} 件は足さない), 閉じた {res["closed"]} 枚, 休止 {res["hibernated"]} 枚')
-    for f in res['failed']:
-        print(f'できなかった: {f}')
-    if res['created']:
-        print('作ったワークスペース: ' + ', '.join(res['created']))
-    if res['left']:
-        print(f'閉じなかったタブ {len(res["left"])} 枚 (案に無い・固定した・移せなかったタブ):' if a.close else
-              f'残したタブ {len(res["left"])} 枚 (閉じるなら --close):')
-        for title, url in res['left']:
-            print(f'  {title}  {url}')
+    for line in apply_report(res, a.close):
+        print(line)
     if not res['switched']:
         print('ワークスペースを切り替える関数が見つからなかった. 画面左上のボタンから開く')
+
+
+def apply_report(res: dict, close: bool) -> list[str]:
+    """vivaldi.apply の結果を, 表示する行にする."""
+    lines = [f'タブ {res["tabs"]} 枚 (開いていたのを移した {res["adopted"]} 枚, 元の場所のまま {res["already"]} 枚, '
+             f'新しく開いた {res["made"]} 枚, 固定したタブのまま {res["kept"]} 枚), スタック {res["stacks"]} 個, ブックマーク {res["bookmarks"]["added"]} 件 '
+             f'(既にあった {res["bookmarks"]["skipped"]} 件は足さない), 閉じた {res["closed"]} 枚, 休止 {res["hibernated"]} 枚']
+    lines += [f'できなかった: {f}' for f in res['failed']]
+    if res['created']:
+        lines.append('作ったワークスペース: ' + ', '.join(res['created']))
+    if res['left']:
+        lines.append(f'閉じなかったタブ {len(res["left"])} 枚 (案に無い・固定した・移せなかったタブ):' if close else
+                     f'残したタブ {len(res["left"])} 枚 (閉じるなら --close):')
+        lines += [f'  {title}  {url}' for title, url in res['left']]
+    return lines
+
+
+def cmd_auto(a) -> None:
+    from . import auto
+    state = pathlib.Path(a.state) if a.state else auto.default_state()
+    state.mkdir(parents=True, exist_ok=True)
+    profile = pathlib.Path(a.profile_dir) if a.profile_dir else snapshot.default_profile(a.browser, a.profile)
+    try:
+        lines = auto.run(state, a.port, profile, a.config, a.labels, idle_min=a.idle, close=a.close,
+                         refile=a.refile, force=a.now, dry_run=a.dry_run)
+    except auto.Skip as e:
+        auto.log(state, f'skip: {e}')
+        return
+    except (Exception, SystemExit) as e:
+        auto.log(state, f'failed: {type(e).__name__}: {e}')
+        raise SystemExit(1)
+    finally:
+        auto.prune(state)
+    auto.log(state, ('dry-run' if a.dry_run else 'applied') + '\n' + '\n'.join(lines))
 
 
 def cmd_tabs(a) -> None:
@@ -212,6 +236,21 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--port', type=int, default=9222, help='Vivaldi の --remote-debugging-port')
     p.add_argument('--dry-run', action='store_true', help='移す先を表示するだけで移さない')
     p.set_defaults(func=cmd_refile)
+
+    p = sub.add_parser('auto', help='操作していない間に, 起動中の Vivaldi のタブを裏で並べ直す (タスクから定期的に呼ぶ)')
+    p.add_argument('--config', help='設定の TOML (既定値に重ねる)')
+    p.add_argument('--labels', help='スレッドに付けた名前の TOML (スタックの名前になる)')
+    p.add_argument('--port', type=int, default=9222, help='Vivaldi の --remote-debugging-port')
+    p.add_argument('--browser', default='vivaldi', choices=snapshot.BROWSERS)
+    p.add_argument('--profile', default='Default')
+    p.add_argument('--profile-dir', help='プロファイルのディレクトリを直接指定する')
+    p.add_argument('--state', help='状態・ログ・案と控えを置くディレクトリ (既定 %%LOCALAPPDATA%%/tab-lineage/auto)')
+    p.add_argument('--idle', type=float, default=30, help='この分数以上操作していないときだけ並べ直す')
+    p.add_argument('--close', action='store_true', help='閉じる案のタブとブックマークに入れたタブを閉じる')
+    p.add_argument('--refile', action='store_true', help='続けてあとで読むの直下を振り分ける')
+    p.add_argument('--now', action='store_true', help='操作の有無とタブの変化を見ずに今すぐ並べ直す')
+    p.add_argument('--dry-run', action='store_true', help='案を作って控えるだけで Vivaldi を変えない')
+    p.set_defaults(func=cmd_auto)
 
     p = sub.add_parser('tabs', help='セッションファイルの開いているタブを並び順に表示する')
     p.add_argument('session')
