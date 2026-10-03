@@ -73,10 +73,11 @@ JS = r'''
   // 開いているタブを URL ごとに並べる. 案のタブはまずここから引き取り, 無いときだけ作る
   const urlOf = t => t.pendingUrl || t.url;
   const before = (await chrome.tabs.query({windowType: 'normal'})).map(t => ({...t, ext: extOf(t)}));
-  // 固定したタブは移さず閉じず, 案にあっても開き直さない
-  const pinned = new Set(before.filter(t => t.pinned).map(urlOf));
+  // 固定したタブは移さず閉じず, 案にあっても開き直さない. quiet のときは各ウィンドウで選ばれているタブも同じ扱いにする
+  const stays = t => t.pinned || (opts.quiet && t.active);
+  const pinned = new Set(before.filter(stays).map(urlOf));
   const pool = new Map();
-  for (const t of before.filter(t => !t.pinned)) pool.set(urlOf(t), [...(pool.get(urlOf(t)) || []), t]);
+  for (const t of before.filter(t => !stays(t))) pool.set(urlOf(t), [...(pool.get(urlOf(t)) || []), t]);
   // 同じ URL が何枚もあれば, 適用先のウィンドウで同じワークスペースに入っているものから引き取る
   const take = (url, wsId) => {
     const ts = pool.get(url) || [];
@@ -183,14 +184,20 @@ JS = r'''
       }
     }
   }
-  for (const t of before.filter(t => t.pinned)) left.push([t.title, urlOf(t)]);
+  for (const t of before.filter(stays)) left.push([t.title, urlOf(t)]);
 
-  let active = null;
+  // quiet のときはワークスペースを切り替えず, 選ぶタブも変えない. 今見えているワークスペースの外へ移したタブを休止させる
+  let active = null, switched = false;
   const first = arr.workspaces[0] && ids[arr.workspaces[0].name];
-  if (first !== undefined && internals.act && internals.store) {
+  if (opts.quiet) {
+    const shown = before.find(t => t.windowId === win.id && t.active);
+    // ワークスペースの外を見ているときは, 案のタブ (どれもワークスペースに入る) を全部休止させる
+    if (shown) active = shown.ext.workspaceId ?? 'none';
+  } else if (first !== undefined && internals.act && internals.store) {
     const idx = internals.store.getWorkspaces().findIndex(x => x.id === first);
     internals.act.activateWorkspaceByIndex(win.id, idx);
     active = first;
+    switched = true;
     // 切り替えた直後はそのワークスペースで前に開いていたタブが選ばれるので, 待ってから選び直す.
     await sleep(500);
     const top = placed.find(t => t.ws === first);
@@ -202,11 +209,15 @@ JS = r'''
     await sleep(opts.settleMs);   // 題名と favicon が読み込まれてから休止させる
     for (const t of placed) {
       if (t.ws === active) continue;
-      try { await chrome.tabs.discard(t.id); hibernated++; } catch (e) { /* 読み込み中などで休止できないタブは残す */ }
+      try {
+        if ((await chrome.tabs.get(t.id)).audible) continue;   // 音を出しているタブは止めない
+        await chrome.tabs.discard(t.id);
+        hibernated++;
+      } catch (e) { /* 読み込み中などで休止できないタブは残す */ }
     }
   }
   return {window: win.id, workspaces: ids, created: createdWs, tabs: placed.length, made: opened, adopted, already, kept, stacks,
-          failed, bookmarks: marks, closed, left, hibernated, switched: active !== null};
+          failed, bookmarks: marks, closed, left, hibernated, switched};
 })
 '''
 
@@ -252,23 +263,25 @@ def evaluate(ws_url: str, expr: str, timeout: float = 300) -> object:
 
 
 TABS = '''(async () => (await chrome.tabs.query({windowType: 'normal'})).map(t => ({
-  id: t.id, window: t.windowId, index: t.index, pinned: t.pinned, title: t.title, url: t.pendingUrl || t.url,
-  vivExtData: t.vivExtData})))()'''
+  id: t.id, window: t.windowId, index: t.index, pinned: t.pinned, active: t.active, title: t.title,
+  url: t.pendingUrl || t.url, vivExtData: t.vivExtData})))()'''
 
 
 def tabs(port: int = 9222) -> list[dict]:
-    """開いているタブの一覧. 閉じる前の控えに使う."""
+    """開いているタブの一覧. 閉じる前の控えと, auto がタブの変化を調べるのに使う."""
     return evaluate(ui_page(port), TABS)
 
 
-def expression(arr: dict, hibernate: bool = True, settle_ms: int = 4000, close: bool = False) -> str:
-    opts = {'hibernate': hibernate, 'settleMs': settle_ms, 'close': close}
+def expression(arr: dict, hibernate: bool = True, settle_ms: int = 4000, close: bool = False,
+               quiet: bool = False) -> str:
+    """quiet: 選ばれているタブを動かさず, ワークスペースも切り替えない (auto が使う)."""
+    opts = {'hibernate': hibernate, 'settleMs': settle_ms, 'close': close, 'quiet': quiet}
     # 既定の ensure_ascii で U+2028 なども ASCII のエスケープに直し, 式の中で文字列が切れないようにする
     return f'{JS}({json.dumps(arr)}, {json.dumps(opts)})'
 
 
-def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = False) -> dict:
-    return evaluate(ui_page(port), expression(arr, hibernate, close=close))
+def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = False, quiet: bool = False) -> dict:
+    return evaluate(ui_page(port), expression(arr, hibernate, close=close, quiet=quiet))
 
 
 # ブックマークバーの root のフォルダの直下にあるリンク
