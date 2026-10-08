@@ -100,6 +100,7 @@ class Graph:
     nodes: dict[int, Node]
     roots: tuple[int, ...]
     stats: dict[str, int]
+    owner: dict[int, int] = field(default_factory=dict)   # 訪問 ID -> その訪問をまとめた節 (畳んだ同じサイトの移動も)
 
 
 class _Builder:
@@ -270,7 +271,9 @@ class _Builder:
                 self.nodes[node.parent].kids.append(node.id)
         self.stats['nodes'] = len(self.nodes)
         self.stats['roots'] = len(roots)
-        return Graph(nodes=self.nodes, roots=tuple(roots), stats=dict(self.stats))
+        owner = {i: i for i in self.nodes}
+        owner.update((v, n) for v in list(self.rep) if v not in owner and (n := self.find(v)) is not None)
+        return Graph(nodes=self.nodes, roots=tuple(roots), stats=dict(self.stats), owner=owner)
 
 
 def build(visits: list[Visit], cfg: LineageConfig, privacy: Privacy | None = None) -> Graph:

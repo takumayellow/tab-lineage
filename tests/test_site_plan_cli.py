@@ -191,3 +191,25 @@ def test_a_tab_without_a_rule_takes_the_workspace_of_its_thread():
     tabs = [Tab(1, 'https://arp.example/', 'ARP とは'), Tab(2, 'https://other.example/', 'ほかのこと')]
     ws = [p.workspace for p in plan.classify(tabs, g, tl, LCFG, ecfg, PRIVACY, now_us=at(100_010))]
     assert ws == ['大学', None]
+
+
+def test_a_tab_on_a_folded_page_takes_the_workspace_of_the_page_it_was_folded_into():
+    ecfg = dataclasses.replace(ECFG, workspaces=(('大学', ('lms.example/*',)),))
+    visits = COURSE[:4] + [visit(6, 40, 'https://arp.example/detail', 'ARP の詳細', frm=4)]
+    g = lineage.build(visits, LCFG, PRIVACY)
+    assert all(n.url != 'https://arp.example/detail' for n in g.nodes.values())
+    tl = episodes.build(g, ecfg, UTC)
+    tabs = [Tab(1, 'https://arp.example/detail', 'ARP の詳細')]
+    assert [p.workspace for p in plan.classify(tabs, g, tl, LCFG, ecfg, PRIVACY, now_us=at(60))] == [None]
+    got = plan.classify(tabs, g, tl, LCFG, ecfg, PRIVACY, now_us=at(60), visits=visits)
+    assert [p.workspace for p in got] == ['大学']
+    assert got[0].goal == plan.classify([Tab(1, 'https://arp.example/', 'ARP とは')], g, tl, LCFG, ecfg, PRIVACY,
+                                        now_us=at(60))[0].goal
+
+
+def test_folded_pages_do_not_use_masked_or_dropped_visits():
+    privacy = Privacy.from_config(config._merge(CFG['privacy'], {'drop': ['arp.example/*']}))
+    ecfg = dataclasses.replace(ECFG, workspaces=(('大学', ('lms.example/*',)),))
+    visits = COURSE[:4] + [visit(6, 40, 'https://arp.example/detail', 'ARP の詳細', frm=4)]
+    g = lineage.build(visits, LCFG, privacy)
+    assert not [u for u in plan._folded_nodes(visits, g, privacy, {}) if 'arp.example' in u]

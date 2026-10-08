@@ -56,12 +56,60 @@ def test_workspace_by_majority():
     assert tl.workspace == {1: 'Work', 2: 'Work'}
 
 
-def test_workspace_needs_a_quarter_of_the_visits():
-    ws = {'workspace': [{'name': 'Work', 'match': ['work.example/*']}]}
-    _, tl = timeline([visit(1, 0, 'https://work.example/a', 'Report', core=1)]
-                     + [visit(k, 5 * k, f'https://news.example/{k}', f'News {k}', core=1) for k in range(2, 6)], ws)
-    (ep,) = tl.episodes
-    assert ep.workspace is None
+def _one_episode(n_other: int, matched: list[str]):
+    ws = {'workspace': [{'name': w, 'match': [f'{w.lower()}.example/*']} for w in ('Work', 'Home', 'School')]}
+    vs = [visit(k + 1, 5 * k, f'https://{w.lower()}.example/{k}', f'{w} {k}', core=1) for k, w in enumerate(matched)]
+    vs += [visit(100 + k, 5 * (len(vs) + k), f'https://news.example/{k}', f'News {k}', core=1) for k in range(n_other)]
+    (ep,) = timeline(vs, ws)[1].episodes
+    return ep.workspace
+
+
+def test_visits_without_a_rule_do_not_dilute_the_vote():
+    assert _one_episode(4, ['Work']) == 'Work'
+
+
+def test_workspace_needs_rules_to_cover_some_of_the_visits():
+    assert _one_episode(10, ['Work']) is None
+
+
+def test_workspace_needs_half_of_the_matched_visits():
+    assert _one_episode(0, ['Work', 'Home', 'Home', 'School']) == 'Home'
+    assert _one_episode(0, ['Work', 'Home', 'School']) is None
+
+
+DAY = 86400
+INFER_WS = {'workspace': [{'name': 'Work', 'match': ['work.example/*']}]}
+
+
+def test_a_thread_without_a_workspace_takes_it_from_a_similar_thread_on_a_nearby_day():
+    _, tl = timeline([
+        visit(1, 0, 'https://work.example/a', 'pandas merge dataframe', core=1),
+        visit(2, 2 * DAY, 'https://blog.example/a', 'pandas merge guide', core=1),
+        visit(3, 2 * DAY + 60, 'https://kaden.example/', 'エアコン カビ 掃除', core=1),
+        visit(4, 20 * DAY, 'https://blog.example/b', 'pandas merge dataframe howto', core=1),
+    ], INFER_WS)
+    first, second, far = tl.episodes
+    assert second.workspace is None
+    got = {t.label: t.workspace for t in second.threads}
+    assert got == {'pandas merge guide': 'Work', 'エアコン カビ 掃除': None}
+    assert [t.workspace for t in far.threads] == [None]
+
+
+def test_inferring_from_other_episodes_can_be_turned_off():
+    _, tl = timeline([
+        visit(1, 0, 'https://work.example/a', 'pandas merge dataframe', core=1),
+        visit(2, 2 * DAY, 'https://blog.example/a', 'pandas merge dataframe tutorial', core=1),
+    ], INFER_WS | {'episodes': {'ws_infer_days': 0}})
+    assert [t.workspace for t in tl.episodes[1].threads] == [None]
+
+
+def test_inferred_workspaces_are_not_passed_on():
+    _, tl = timeline([
+        visit(1, 0, 'https://work.example/a', 'pandas merge dataframe', core=1),
+        visit(2, 6 * DAY, 'https://blog.example/a', 'pandas merge dataframe tutorial', core=1),
+        visit(3, 12 * DAY, 'https://blog.example/b', 'pandas merge dataframe tutorial', core=1),
+    ], INFER_WS)
+    assert [t.workspace for e in tl.episodes for t in e.threads] == ['Work', 'Work', None]
 
 
 def test_unrelated_roots_become_separate_threads_and_same_site_roots_join():

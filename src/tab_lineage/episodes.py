@@ -6,6 +6,7 @@
 - 寄り道:     木の中で, 部分木の話題がそれ以外とほとんど重ならない枝に印を付ける (規則 7).
 - 放置:       stale_hours 以上開いていたページに印を付ける (規則 8).
 - ワークスペース: 設定の glob で訪問を分類し, 多数決で回とスレッドに付ける (規則 9).
+             それでも決まらないスレッドは, 近い日の別の回で題名の近いスレッドから引き継ぐ.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import math
 import re
 import zoneinfo
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .histdb import US, unix_s
 from .lineage import Graph, Node
@@ -37,7 +38,9 @@ class EpisodeConfig:
     detour_max: int = 400
     lone_search_s: int = 120       # 子の無い検索をこの秒数以内に始まる次の木へ付ける
     stale_hours: float = 12.0
-    ws_share: float = 0.25         # 最多のワークスペースが訪問のこの割合に届かなければ未分類
+    ws_share: float = 0.5          # 最多のワークスペースが, 規則に当たった訪問のこの割合に届かなければ未分類
+    ws_cover: float = 0.1          # 規則に当たった訪問が全体のこの割合に届かなければ未分類
+    ws_infer_days: float = 7.0     # 決まらないスレッドが, 題名の近いスレッドからワークスペースを引き継ぐ範囲 (日). 0 で引き継がない
     workspaces: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @classmethod
@@ -49,7 +52,9 @@ class EpisodeConfig:
             max_lanes=max(2, int(th.get('max_lanes', 8))),   # 1 だと全部が「そのほか」になる
             detour_theta=float(th.get('detour_theta', 0.04)),
             stale_hours=float(cfg.get('episodes', {}).get('stale_hours', 12)),
-            ws_share=float(cfg.get('episodes', {}).get('ws_share', 0.25)),
+            ws_share=float(cfg.get('episodes', {}).get('ws_share', 0.5)),
+            ws_cover=float(cfg.get('episodes', {}).get('ws_cover', 0.1)),
+            ws_infer_days=float(cfg.get('episodes', {}).get('ws_infer_days', 7)),
             workspaces=tuple((w['name'], tuple(w.get('match', ()))) for w in cfg.get('workspace', ())),
         )
 
@@ -211,8 +216,12 @@ def _label(sc: _Scorer, ids: list[int], weights: dict[int, int]) -> str:
     return text if len(text) <= LABEL_MAX else text[:LABEL_MAX - 1] + '…'
 
 
-def _majority(ws: dict[int, str], ids, weights: dict[int, int], share: float) -> str | None:
-    """訪問数の最も多いワークスペース. それが全体の share に届かなければ None."""
+def _majority(ws: dict[int, str], ids, weights: dict[int, int], cfg: EpisodeConfig) -> str | None:
+    """規則に当たった訪問で最も多いワークスペース.
+
+    規則に当たらないサイト (調べもので開いたページなど) は票に入れず, 当たった訪問の中で ws_share に届けば付ける.
+    当たった訪問が全体の ws_cover に届かない (規則に当たるのがほんの一部) ときは付けない.
+    """
     c: Counter[str] = Counter()
     total = 0
     for i in ids:
@@ -222,7 +231,8 @@ def _majority(ws: dict[int, str], ids, weights: dict[int, int], share: float) ->
     if not c:
         return None
     name, n = c.most_common(1)[0]
-    return name if n >= total * share else None
+    matched = sum(c.values())
+    return name if n >= matched * cfg.ws_share and matched >= total * cfg.ws_cover else None
 
 
 def _threads(sc: _Scorer, cfg: EpisodeConfig, units: list[list[int]], trees: dict[int, list[int]],
@@ -260,7 +270,7 @@ def _threads(sc: _Scorer, cfg: EpisodeConfig, units: list[list[int]], trees: dic
         roots = tuple(grp['roots'])
         label = OTHER if grp.get('other') else _label(sc, grp['ids'], weights)
         out.append(Thread(id=str(roots[0]), label=label, roots=roots, visits=grp['visits'],
-                          workspace=_majority(ws, grp['ids'], weights, cfg.ws_share)))
+                          workspace=_majority(ws, grp['ids'], weights, cfg)))
     # レーンは始まった順に並べる
     return tuple(sorted(out, key=lambda t: sc.g.nodes[t.roots[0]].t0))
 
@@ -332,9 +342,55 @@ def build(g: Graph, cfg: EpisodeConfig, tz: dt.tzinfo | None = None) -> Timeline
         episodes.append(Episode(
             id=ids[k], t0=spans[k][0], t1=spans[k][1], threads=threads, nodes=frozenset(members),
             cont=tuple(cont), visits=sum(weights[i] for i in members), label=label,
-            workspace=_majority(ws, members, weights, cfg.ws_share)))
-    return Timeline(episodes=tuple(episodes), detours=frozenset(detours), stale=stale, workspace=ws,
-                    tz_offsets=_offsets(spans, tz))
+            workspace=_majority(ws, members, weights, cfg)))
+    return Timeline(episodes=_infer_workspaces(sc, cfg, episodes), detours=frozenset(detours), stale=stale,
+                    workspace=ws, tz_offsets=_offsets(spans, tz))
+
+
+def _infer_workspaces(sc: _Scorer, cfg: EpisodeConfig, episodes: list[Episode]) -> tuple[Episode, ...]:
+    """スレッドにも回にもワークスペースが付かないスレッドに, 前後 ws_infer_days 日の別の回で
+    題名が最も近い (余弦が theta 以上) スレッドのワークスペース (スレッド, 無ければ回) を付ける.
+    引き継いだものはさらに引き継がない."""
+    if cfg.ws_infer_days <= 0:
+        return tuple(episodes)
+    vecs: dict[tuple[int, int], Vector] = {}
+    known: list[tuple[int, int, int, str]] = []     # (回の開始時刻, 回, スレッド, ワークスペース)
+    unknown: list[tuple[int, int]] = []
+    for e, ep in enumerate(episodes):
+        for k, (th, ids) in enumerate(zip(ep.threads, _thread_ids(sc.g, ep))):
+            if th.label == OTHER:
+                continue                              # 話題の違う木の寄せ集めなので, 引き継ぐ元にも先にもしない
+            vecs[(e, k)] = sc.vector(ids)
+            if w := th.workspace or ep.workspace:
+                known.append((ep.t0, e, k, w))
+            else:
+                unknown.append((e, k))
+    if not known or not unknown:
+        return tuple(episodes)
+    known.sort()
+    starts = [t for t, *_ in known]
+    window = int(cfg.ws_infer_days * 86400 * US)
+    got: dict[tuple[int, int], str] = {}
+    for e, k in unknown:
+        v, t0 = vecs[(e, k)], episodes[e].t0
+        best, best_cos = None, cfg.theta
+        for _, e2, k2, w in known[bisect.bisect_left(starts, t0 - window):bisect.bisect_right(starts, t0 + window)]:
+            if e2 != e and (c := cosine(v, vecs[(e2, k2)])) >= best_cos:
+                best, best_cos = w, c
+        if best:
+            got[(e, k)] = best
+    return tuple(
+        replace(ep, threads=tuple(replace(th, workspace=got[(e, k)]) if (e, k) in got else th
+                                  for k, th in enumerate(ep.threads)))
+        for e, ep in enumerate(episodes))
+
+
+def _thread_ids(g: Graph, ep: Episode) -> list[list[int]]:
+    """回のスレッドごとの節 (ep.threads と同じ並び)."""
+    out: list[list[int]] = [[] for _ in ep.threads]
+    for i, k in thread_members(g, ep).items():
+        out[k].append(i)
+    return out
 
 
 def thread_members(g: Graph, ep: Episode) -> dict[int, int]:

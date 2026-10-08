@@ -94,7 +94,7 @@ def cmd_arrange(a) -> None:
     acfg = arrange.ArrangeConfig.from_config(r.cfg)
     placed = plan.classify(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
                            labels=config.load_labels(a.labels),
-                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy))
+                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy), visits=r.visits)
     arr = arrange.build(placed, acfg)
     print(arrange.outline(arr))
     if a.out:
@@ -145,6 +145,9 @@ def apply_report(res: dict, close: bool) -> list[str]:
     lines = [f'タブ {res["tabs"]} 枚 (開いていたのを移した {res["adopted"]} 枚, 元の場所のまま {res["already"]} 枚, '
              f'新しく開いた {res["made"]} 枚, 固定したタブのまま {res["kept"]} 枚), スタック {res["stacks"]} 個, ブックマーク {res["bookmarks"]["added"]} 件 '
              f'(既にあった {res["bookmarks"]["skipped"]} 件は足さない), 閉じた {res["closed"]} 枚, 休止 {res["hibernated"]} 枚']
+    if res.get('guarded') or res.get('unknown'):
+        lines.append(f'触らなかったタブ {res.get("guarded", 0)} 枚 (入力しかけ {res.get("dirty", 0)} ページ・最近見たタブ), '
+                     f'中を調べられず閉じも休止もしなかったページ {res.get("unknown", 0)} 枚')
     lines += [f'できなかった: {f}' for f in res['failed']]
     if res['created']:
         lines.append('作ったワークスペース: ' + ', '.join(res['created']))
@@ -162,7 +165,8 @@ def cmd_auto(a) -> None:
     profile = pathlib.Path(a.profile_dir) if a.profile_dir else snapshot.default_profile(a.browser, a.profile)
     try:
         lines = auto.run(state, a.port, profile, a.config, a.labels, idle_min=a.idle, close=a.close,
-                         refile=a.refile, force=a.now, dry_run=a.dry_run)
+                         refile=a.refile, force=a.now, dry_run=a.dry_run,
+                         busy_tabs=a.busy_tabs, busy_interval=a.busy_interval)
     except auto.Skip as e:
         auto.log(state, f'skip: {e}')
         return
@@ -246,6 +250,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--profile-dir', help='プロファイルのディレクトリを直接指定する')
     p.add_argument('--state', help='状態・ログ・案と控えを置くディレクトリ (既定 %%LOCALAPPDATA%%/tab-lineage/auto)')
     p.add_argument('--idle', type=float, default=30, help='この分数以上操作していないときだけ並べ直す')
+    p.add_argument('--busy-tabs', type=int, default=0,
+                   help='操作中でも, 前の整理のあと新しく開いたタブがこの枚数以上なら並べ直す (--idle 分以内に見たタブには触らない). 0 なら操作中は並べ直さない')
+    p.add_argument('--busy-interval', type=float, default=60, help='操作中に並べ直すとき, 前の整理からあける分数')
     p.add_argument('--close', action='store_true', help='閉じる案のタブとブックマークに入れたタブを閉じる')
     p.add_argument('--refile', action='store_true', help='続けてあとで読むの直下を振り分ける')
     p.add_argument('--now', action='store_true', help='操作の有無とタブの変化を見ずに今すぐ並べ直す')

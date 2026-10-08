@@ -33,7 +33,7 @@ def test_site_builds_from_the_sample(tmp_path, capsys):
     assert {h for h in re.findall(r'href="#([^"]+)"', page)} <= ids
     # 本文の既定値は default.toml から入る
     assert '直前 30 秒以内の検索の子にする' in page
-    assert '訪問の 4 分の 1（<code>ws_share</code>）' in page
+    assert '規則に当たった訪問の 2 分の 1（<code>ws_share</code>）' in page
     assert '最後に見てから 3 日以上たったタブ' in page
 
 
