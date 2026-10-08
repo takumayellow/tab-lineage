@@ -282,7 +282,7 @@ def test_cli_auto_passes_the_busy_options(tmp_path, profile, live, monkeypatch):
 
 def test_apply_report_says_what_it_left_alone():
     lines = cli.apply_report(dict(RESULT, guarded=3, dirty=1, unknown=40), close=True)
-    assert '触らなかったタブ 3 枚 (入力しかけ 1 ページ・最近見たタブ), 中を調べられず閉じも休止もしなかったページ 40 枚' in lines
+    assert '触らなかったタブ 3 枚 (入力しかけ 1 ページ・最近見たタブ), 中を調べられず閉じも休止もしなかったタブ 40 枚' in lines
     assert not any('触らなかった' in line for line in cli.apply_report(RESULT, close=True))   # 前の版の結果でも落ちない
 
 
@@ -386,7 +386,7 @@ def test_apply_leaves_dirty_tabs_alone_and_reports_the_counts(monkeypatch):
                         lambda port: {'dirty': ['https://a.example/'], 'unknown': ['https://b.example/']})
     monkeypatch.setattr(vivaldi, 'ui_page', lambda port: 'ws://127.0.0.1:9242/ui')
     sent = []
-    monkeypatch.setattr(vivaldi, 'evaluate', lambda ws, expr: sent.append(expr) or dict(RESULT, guarded=1))
+    monkeypatch.setattr(vivaldi, 'evaluate', lambda ws, expr: sent.append(expr) or dict(RESULT, guarded=1, doubted=1))
     res = vivaldi.apply({'workspaces': []}, port=9242, quiet=True, recent_ms=5)
     assert res['dirty'] == 1 and res['unknown'] == 1 and res['guarded'] == 1
     assert '"keep": ["https://a.example/"]' in sent[0] and '"recentMs": 5' in sent[0]

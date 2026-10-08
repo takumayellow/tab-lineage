@@ -84,6 +84,7 @@ JS = r'''
   const recent = t => opts.recentMs > 0 && (t.lastAccessed === undefined || Date.now() - t.lastAccessed < opts.recentMs);
   const stays = t => t.pinned || (opts.quiet && t.active) || keep.has(urlOf(t)) || recent(t);
   const guarded = before.filter(t => !t.pinned && !(opts.quiet && t.active) && stays(t)).length;
+  const doubted = before.filter(doubtful).length;
   const pinned = new Set(before.filter(stays).map(urlOf));
   const pool = new Map();
   for (const t of before.filter(t => !stays(t))) pool.set(urlOf(t), [...(pool.get(urlOf(t)) || []), t]);
@@ -227,7 +228,7 @@ JS = r'''
     }
   }
   return {window: win.id, workspaces: ids, created: createdWs, tabs: placed.length, made: opened, adopted, already, kept, stacks,
-          failed, bookmarks: marks, closed, left, hibernated, switched, guarded};
+          failed, bookmarks: marks, closed, left, hibernated, switched, guarded, doubted};
 })
 '''
 
@@ -418,7 +419,7 @@ def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = Fal
     forms = form_state(port)
     res = evaluate(ui_page(port), expression(arr, hibernate, close=close, quiet=quiet, keep=forms['dirty'],
                                              unsure=forms['unknown'], recent_ms=recent_ms))
-    return {**res, 'dirty': len(forms['dirty']), 'unknown': len(forms['unknown'])}
+    return {**res, 'dirty': len(forms['dirty']), 'unknown': res.get('doubted', 0)}
 
 
 # ブックマークバーの root のフォルダの直下にあるリンク
