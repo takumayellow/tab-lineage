@@ -158,6 +158,7 @@ def defaults() -> dict[str, str]:
         'D_GAP_MINUTES': str(d['episodes']['gap_minutes']),
         'D_STALE_HOURS': str(d['episodes']['stale_hours']),
         'D_WS_SHARE': _share(d['episodes']['ws_share']),
+        'D_WS_INFER_DAYS': str(d['episodes']['ws_infer_days']),
         'D_SEARCH_WINDOW': str(d['lineage']['search_window_seconds']),
         'D_DETOUR_THETA': str(d['threads']['detour_theta']),
         'D_READING_ROOT': esc(d['arrange']['reading_root']),

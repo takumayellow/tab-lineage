@@ -114,6 +114,18 @@ def anchor_labels(visits: list[Visit], anchors: tuple[Anchor, ...], privacy: Pri
     return out
 
 
+def _folded_nodes(visits: list[Visit], g: Graph, privacy: Privacy, node_of: dict[str, int]) -> dict[str, int]:
+    """節の URL に無い URL -> その URL の最後の訪問をまとめた節. 伏せる・除くページは使わない."""
+    out: dict[str, int] = {}
+    for v in sorted(visits, key=lambda v: (v.t, v.id)):
+        if privacy.dropped(v.url, v.title) or privacy.mask_of(v.url):
+            continue
+        url = clean_url(v.url, privacy.keep_query)
+        if url not in node_of and (nid := g.owner.get(v.id)) is not None:
+            out[url] = nid
+    return out
+
+
 @dataclass(frozen=True)
 class Placed:
     """1 枚のタブの分類. status は keep / dup / serp / stash と, プライバシーの設定で消す drop."""
@@ -127,14 +139,17 @@ class Placed:
 
 def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
              privacy: Privacy, now_us: int, stash_days: float = STASH_DAYS, labels: dict | None = None,
-             anchored: dict[str, str] | None = None) -> list[Placed]:
+             anchored: dict[str, str] | None = None, visits: list[Visit] | None = None) -> list[Placed]:
     """labels は labels.toml を読んだもの. 名前を付けたスレッドはその名前を goal にする.
-    anchored は anchor_labels の結果. 当たったタブはスレッドより先にその名前を goal にする."""
+    anchored は anchor_labels の結果. 当たったタブはスレッドより先にその名前を goal にする.
+    visits を渡すと, 節の URL に当たらないタブ (同じサイトの中でたどって畳まれたページ) も,
+    同じ URL の最後の訪問をまとめた節から流れを引く."""
     last_seen: dict[str, int] = {}
     node_of: dict[str, int] = {}
     for i, n in g.nodes.items():
         if n.t1 >= last_seen.get(n.url, -1):
             last_seen[n.url], node_of[n.url] = n.t1, i
+    folded = _folded_nodes(visits or [], g, privacy, node_of)
     detours = _detour_labels(g, tl)
     goals = _thread_labels(g, tl, labels or {}) | detours
     # 寄り道の枝は流れから外れているので, ワークスペースを引き継がない
@@ -161,9 +176,10 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
         else:
             status = 'keep'
         first = first_of.setdefault(key, len(out))
-        goal = (None if masked else (anchored or {}).get(page_key(tab.url))) or goals.get(node_of.get(url, -1)) or host
+        nid = node_of.get(url, folded.get(url, -1))
+        goal = (None if masked else (anchored or {}).get(page_key(tab.url))) or goals.get(nid) or host
         # URL の規則に当たらないタブは, 開いた流れ (スレッド, 無ければ回) のワークスペースに入れる
-        workspace = ecfg.workspace_of(tab.url) or spaces.get(node_of.get(url, -1))
+        workspace = ecfg.workspace_of(tab.url) or spaces.get(nid)
         out.append(Placed(tab, title, status, workspace, goal, first))
     return out
 

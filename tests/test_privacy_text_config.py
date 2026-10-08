@@ -52,7 +52,8 @@ def test_merge_is_recursive_and_does_not_mutate():
 def test_load_config_and_labels(tmp_path):
     cfg = tmp_path / 'c.toml'
     cfg.write_text('[episodes]\ngap_minutes = 45\n', encoding='utf-8')
-    assert config.load(cfg)['episodes'] == {'gap_minutes': 45, 'stale_hours': 12, 'ws_share': 0.25}
+    assert config.load(cfg)['episodes'] == {'gap_minutes': 45, 'stale_hours': 12, 'ws_share': 0.5,
+                                                 'ws_cover': 0.1, 'ws_infer_days': 7}
     labels = tmp_path / 'l.toml'
     labels.write_text('[[episode]]\nid = "2026-09-01T10:00"\ntitle = "t"\nhide = true\n', encoding='utf-8')
     assert config.load_labels(labels)['2026-09-01T10:00']['hide'] is True

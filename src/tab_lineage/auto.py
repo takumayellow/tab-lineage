@@ -1,10 +1,13 @@
 """起動中の Vivaldi のタブを, 裏で並べ直す (auto).
 
 タスクスケジューラなどから定期的に呼ぶ. 1 回の呼び出しで次を確かめ, そろったときだけ arrange と apply をする.
-  1. PC を idle 分以上操作していない (Windows だけ確かめる)
+  1. PC を idle 分以上操作していない (Windows だけ確かめる).
+     操作中でも, 前の整理のあと新しく開いたタブが busy_tabs 枚以上あり, 前の整理から busy_interval 分たっていれば整理する.
+     そのときは idle 分以内に見たタブに触らない
   2. Vivaldi がデバッグのポートを開いている
   3. 前の整理のあと, 開いているタブの URL が変わった. 手でタブを並べ替えただけなら整理し直さない
 適用は quiet で行う. 各ウィンドウで選ばれているタブと固定したタブは動かさず, ワークスペースも切り替えない.
+入力しかけのページは閉じも休止もしない (vivaldi.apply).
 セッションファイルの代わりに, 起動中の Vivaldi から今のタブを読む (起動中はセッションファイルを読めない).
 案と適用前の控えは <state>/runs/<日時>/ に残す. URL と題名がそのまま入るので公開しない.
 """
@@ -58,6 +61,29 @@ def fingerprint(tabs: list[dict]) -> str:
     return hashlib.sha256('\n'.join(urls).encode('utf-8')).hexdigest()
 
 
+def _mark(url: str) -> str:
+    return hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]
+
+
+def url_marks(tabs: list[dict]) -> list[str]:
+    """固定していないタブの URL のハッシュ. 状態のファイルに URL そのものを残さない."""
+    return sorted({_mark(t.get('url') or '') for t in tabs if not t.get('pinned')})
+
+
+def new_tabs(tabs: list[dict], saved: dict) -> int:
+    """前の整理のときに無かった URL の, 固定していないタブの枚数. 覚えていなければ全部数える."""
+    seen = set(saved.get('urls') or ())
+    return sum(1 for t in tabs if not t.get('pinned') and _mark(t.get('url') or '') not in seen)
+
+
+def minutes_since(saved: dict) -> float | None:
+    """前の整理からの分数. 整理したことが無ければ None."""
+    try:
+        return (dt.datetime.now() - dt.datetime.fromisoformat(saved['applied'])).total_seconds() / 60
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def to_tabs(tabs: list[dict]) -> list[session.Tab]:
     def ext(t):
         try:
@@ -96,34 +122,46 @@ def make_plan(history: pathlib.Path, tabs: list[dict], config_path: str | None, 
     acfg = arrange.ArrangeConfig.from_config(r.cfg)
     placed = plan.classify(to_tabs(tabs), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
                            labels=config.load_labels(labels_path),
-                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy))
+                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy), visits=r.visits)
     return arrange.validate(arrange.build(placed, acfg))
 
 
-def check(state: pathlib.Path, port: int, idle_min: float, force: bool) -> tuple[list[dict], str]:
-    """整理してよければ今のタブとその fingerprint を返す. だめなら Skip."""
+def check(state: pathlib.Path, port: int, idle_min: float, force: bool,
+          busy_tabs: int = 0, busy_interval: float = 60) -> tuple[list[dict], str, bool]:
+    """整理してよければ, 今のタブ・その fingerprint・操作中に整理するか を返す. だめなら Skip.
+    busy_tabs が 0 なら操作中には整理しない."""
+    busy = ''
     if not force:
         idle = idle_seconds()
         if idle is None and os.name == 'nt':   # 取れないときは操作されているものとして扱う
             raise Skip('無操作の時間を取れない')
         if idle is not None and idle < idle_min * 60:
-            raise Skip(f'操作されている (無操作 {int(idle // 60)} 分)')
+            busy = f'操作されている (無操作 {int(idle // 60)} 分)'
+            if busy_tabs <= 0:
+                raise Skip(busy)
     try:
         tabs = vivaldi.tabs(port)
     except SystemExit as e:   # ポートが開いていない・Vivaldi ではない
         raise Skip(str(e))
     fp = fingerprint(tabs)
-    if not force and load_state(state).get('fingerprint') == fp:
+    saved = load_state(state)
+    if busy:
+        n, since = new_tabs(tabs, saved), minutes_since(saved)
+        if n < busy_tabs:
+            raise Skip(f'{busy}. 新しいタブ {n} 枚 ({busy_tabs} 枚から整理する)')
+        if since is not None and since < busy_interval:
+            raise Skip(f'{busy}. 新しいタブ {n} 枚, 前の整理から {int(since)} 分 ({busy_interval:g} 分あける)')
+    if not force and saved.get('fingerprint') == fp:
         raise Skip('前の整理のあとタブが変わっていない')
-    return tabs, fp
+    return tabs, fp, bool(busy)
 
 
 def run(state: pathlib.Path, port: int, profile: pathlib.Path, config_path: str | None = None,
         labels_path: str | None = None, idle_min: float = 30, close: bool = False, refile: bool = False,
-        force: bool = False, dry_run: bool = False) -> list[str]:
+        force: bool = False, dry_run: bool = False, busy_tabs: int = 0, busy_interval: float = 60) -> list[str]:
     """1 回分. 報告の行を返す. 条件がそろわなければ Skip."""
     from .cli import apply_report
-    tabs, fp = check(state, port, idle_min, force)
+    tabs, fp, busy = check(state, port, idle_min, force, busy_tabs, busy_interval)
     run_dir = state / 'runs' / f'{dt.datetime.now():%Y%m%d-%H%M%S}'
     try:
         run_dir.mkdir(parents=True)
@@ -136,10 +174,10 @@ def run(state: pathlib.Path, port: int, profile: pathlib.Path, config_path: str 
         history.unlink(missing_ok=True)   # 大きい. 案と控えがあれば足りる
     (run_dir / 'plan.json').write_text(json.dumps(arr, ensure_ascii=False, indent=1), encoding='utf-8')
     (run_dir / 'before.json').write_text(json.dumps(tabs, ensure_ascii=False, indent=1), encoding='utf-8')
-    lines = [arrange.outline(arr)]
+    lines = ([f'操作中なので, {idle_min:g} 分以内に見たタブには触らない'] if busy else []) + [arrange.outline(arr)]
     if dry_run:
         return lines
-    res = vivaldi.apply(arr, port=port, close=close, quiet=True)
+    res = vivaldi.apply(arr, port=port, close=close, quiet=True, recent_ms=int(idle_min * 60_000) if busy else 0)
     lines += apply_report(res, close)
     if res['failed'] and not (res['adopted'] or res['already'] or res['made']):
         # 1 枚も置けなかった. 済んだことにせず, 次の回にやり直す
@@ -151,10 +189,12 @@ def run(state: pathlib.Path, port: int, profile: pathlib.Path, config_path: str 
             lines.append(f'あとで読むを振り分けた {vivaldi.move(port, acfg.reading_root, moves)["moved"]} 件')
     # 適用で変わった後のタブを覚える. 次の回はここから URL が変わったときだけ整理する
     try:
-        fp = fingerprint(vivaldi.tabs(port))
+        after = vivaldi.tabs(port)
     except (Exception, SystemExit) as e:   # 読めなければ前の値で覚える. 次の回にもう一度整理するだけで済む
         lines.append(f'適用の後のタブを読めなかった: {e}')
-    save_state(state, {'fingerprint': fp, 'applied': dt.datetime.now().isoformat(timespec='seconds'), 'run': run_dir.name})
+        after = tabs
+    save_state(state, {'fingerprint': fingerprint(after), 'urls': url_marks(after),
+                       'applied': dt.datetime.now().isoformat(timespec='seconds'), 'run': run_dir.name})
     return lines
 
 

@@ -11,6 +11,8 @@ Vivaldi を --remote-debugging-port=<port> --remote-debugging-address=127.0.0.1 
      案に無いタブ (案を作ったあとに開いたタブなど) には触らず, left として返す
   5. 最初のワークスペースを開き, ほかのワークスペースのタブを休止させる (メモリを使わない)
 固定したタブは動かさず閉じない. 1 枚・1 スタックで失敗しても止めずに続け, failed として返す.
+入力しかけのフォームがあるタブ (form_state の dirty) は, 移さず閉じず休止させない. 閉じたり休止させたりすると入力が消えるため.
+中を調べられなかったタブ (unknown. 裏で凍結されたページなど) は, 移しはするが閉じず休止させない. 移しても入力は消えない.
 
 タブの作成とスタックは Vivaldi の画面 (main.html) が使う拡張機能の API で行う. ワークスペースの作成と
 切り替えはその API に無いので, 画面の内部の関数を探して呼ぶ. Vivaldi の版が変わって見つからないときは,
@@ -18,6 +20,7 @@ Vivaldi を --remote-debugging-port=<port> --remote-debugging-address=127.0.0.1 
 """
 from __future__ import annotations
 
+import itertools
 import json
 import urllib.request
 
@@ -73,8 +76,13 @@ JS = r'''
   // 開いているタブを URL ごとに並べる. 案のタブはまずここから引き取り, 無いときだけ作る
   const urlOf = t => t.pendingUrl || t.url;
   const before = (await chrome.tabs.query({windowType: 'normal'})).map(t => ({...t, ext: extOf(t)}));
-  // 固定したタブは移さず閉じず, 案にあっても開き直さない. quiet のときは各ウィンドウで選ばれているタブも同じ扱いにする
-  const stays = t => t.pinned || (opts.quiet && t.active);
+  // 固定したタブは移さず閉じず, 案にあっても開き直さない. quiet のときは各ウィンドウで選ばれているタブも同じ扱いにする.
+  // 入力しかけのタブ (keep) と, recentMs 以内に見たタブ (操作中に整理するとき) も同じ扱い. 見た時刻が取れなければ見たものとする.
+  // 中を調べられなかったタブ (unsure) は移すが, 閉じず休止させない
+  const keep = new Set(opts.keep || []), unsure = new Set(opts.unsure || []);
+  const recent = t => opts.recentMs > 0 && (t.lastAccessed === undefined || Date.now() - t.lastAccessed < opts.recentMs);
+  const stays = t => t.pinned || (opts.quiet && t.active) || keep.has(urlOf(t)) || recent(t);
+  const guarded = before.filter(t => !t.pinned && !(opts.quiet && t.active) && stays(t)).length;
   const pinned = new Set(before.filter(stays).map(urlOf));
   const pool = new Map();
   for (const t of before.filter(t => !stays(t))) pool.set(urlOf(t), [...(pool.get(urlOf(t)) || []), t]);
@@ -177,7 +185,7 @@ JS = r'''
   const shut = new Set([...(arr.close || []).map(c => c.url), ...marked]);
   for (const ts of pool.values()) {
     for (const t of ts) {
-      if (opts.close && shut.has(urlOf(t))) {
+      if (opts.close && shut.has(urlOf(t)) && !unsure.has(urlOf(t))) {
         try { await chrome.tabs.remove(t.id); closed++; } catch (e) { left.push([t.title, urlOf(t)]); }
       } else {
         left.push([t.title, urlOf(t)]);
@@ -210,26 +218,30 @@ JS = r'''
     for (const t of placed) {
       if (t.ws === active) continue;
       try {
-        if ((await chrome.tabs.get(t.id)).audible) continue;   // 音を出しているタブは止めない
+        const now = await chrome.tabs.get(t.id);
+        if (now.audible || unsure.has(urlOf(now))) continue;   // 音を出しているタブと, 中を調べられなかったタブは止めない
         await chrome.tabs.discard(t.id);
         hibernated++;
       } catch (e) { /* 読み込み中などで休止できないタブは残す */ }
     }
   }
   return {window: win.id, workspaces: ids, created: createdWs, tabs: placed.length, made: opened, adopted, already, kept, stacks,
-          failed, bookmarks: marks, closed, left, hibernated, switched};
+          failed, bookmarks: marks, closed, left, hibernated, switched, guarded};
 })
 '''
 
 
-def ui_page(port: int) -> str:
-    """Vivaldi の画面 (main.html) の WebSocket の URL."""
+def _pages(port: int) -> list[dict]:
     try:
         with urllib.request.urlopen(f'http://127.0.0.1:{port}/json/list', timeout=5) as r:
-            pages = json.load(r)
+            return json.load(r)
     except OSError as e:
         raise SystemExit(f'127.0.0.1:{port} に接続できない. Vivaldi を --remote-debugging-port={port} で起動しているか確かめる ({e})')
-    for p in pages:
+
+
+def ui_page(port: int) -> str:
+    """Vivaldi の画面 (main.html) の WebSocket の URL."""
+    for p in _pages(port):
         if p.get('url', '').startswith('chrome-extension://') and p['url'].endswith(UI_SUFFIX):
             ws = p.get('webSocketDebuggerUrl', '')
             if not ws.startswith((f'ws://127.0.0.1:{port}/', f'ws://localhost:{port}/')):
@@ -264,7 +276,45 @@ def evaluate(ws_url: str, expr: str, timeout: float = 300) -> object:
 
 TABS = '''(async () => (await chrome.tabs.query({windowType: 'normal'})).map(t => ({
   id: t.id, window: t.windowId, index: t.index, pinned: t.pinned, active: t.active, title: t.title,
-  url: t.pendingUrl || t.url, vivExtData: t.vivExtData})))()'''
+  url: t.pendingUrl || t.url, vivExtData: t.vivExtData, lastAccessed: t.lastAccessed})))()'''
+
+# ページで入力しかけのものがあるか. 値は返さず, 有れば true, 無ければ false, 分からなければ null を返す.
+# 同じオリジンの iframe と開いた shadow root の中も見る. 別のオリジンの iframe は _probe がフレームごとに調べる.
+# 選んでいない編集できる要素に文字があるときは, サイトの中身か書きかけか見分けられないので null. 調べて落ちたら true
+DIRTY = r'''(() => {
+  const skip = new Set(['hidden', 'submit', 'button', 'reset', 'image']);
+  let maybe = false;
+  const dirty = doc => {
+    for (const e of doc.querySelectorAll('[contenteditable]')) {
+      if (!e.isContentEditable || (e.parentElement && e.parentElement.isContentEditable)) continue;
+      if (!(e.textContent || '').trim()) continue;
+      if (e.matches(':focus-within')) return true;
+      maybe = true;
+    }
+    for (const e of doc.querySelectorAll('*')) if (e.shadowRoot && dirty(e.shadowRoot)) return true;
+    for (const e of doc.querySelectorAll('input, textarea, select')) {
+      if (e.disabled || e.readOnly) continue;
+      if (e.tagName === 'SELECT') {
+        if ([...e.options].some(o => o.selected !== o.defaultSelected)) return true;
+        continue;
+      }
+      const type = (e.type || '').toLowerCase();
+      if (skip.has(type)) continue;
+      if (type === 'checkbox' || type === 'radio') { if (e.checked !== e.defaultChecked) return true; continue; }
+      if (type === 'file') { if (e.files && e.files.length) return true; continue; }
+      if (e.value !== e.defaultValue) return true;
+    }
+    for (const f of doc.querySelectorAll('iframe, frame')) {
+      let d = null;
+      try { d = f.contentDocument; } catch (e) { /* 別のオリジン */ }
+      if (d && dirty(d)) return true;
+    }
+    return false;
+  };
+  try { return typeof window.onbeforeunload === 'function' || dirty(document) || (maybe ? null : false); } catch (e) { return true; }
+})()'''
+DIRTY_TIMEOUT = 2   # 応答するページは 0.1 秒もかからない. 凍結したページは待っても応答しない
+DIRTY_WORKERS = 16
 
 
 def tabs(port: int = 9222) -> list[dict]:
@@ -272,16 +322,102 @@ def tabs(port: int = 9222) -> list[dict]:
     return evaluate(ui_page(port), TABS)
 
 
+def _call(ws, n: int, method: str, params: dict | None = None) -> dict:
+    ws.send(json.dumps({'id': n, 'method': method, 'params': params or {}}))
+    while True:
+        msg = json.loads(ws.recv())
+        if msg.get('id') == n:
+            if 'error' in msg:
+                raise RuntimeError(msg['error'].get('message'))
+            return msg.get('result', {})
+
+
+def _child_frames(tree: dict):
+    for c in tree.get('childFrames', []):
+        yield c['frame']['id']
+        yield from _child_frames(c)
+
+
+def _probe(ws_url: str) -> bool | None:
+    """入力しかけなら True, 無ければ False, 調べられなければ None.
+    ページの中から読めない別のオリジンの iframe も, 同じプロセスで動くものは isolated world を作って調べる
+    (別のプロセスで動く iframe は form_state が別の接続先として調べる)."""
+    try:
+        import websocket
+        ws = websocket.create_connection(ws_url, timeout=DIRTY_TIMEOUT, suppress_origin=True)
+    except (Exception, SystemExit):   # 閉じた直後など
+        return None
+    try:
+        n = itertools.count(1)
+        tree = _call(ws, next(n), 'Page.getFrameTree')['frameTree']
+        contexts = [None]
+        for f in _child_frames(tree):
+            try:
+                world = _call(ws, next(n), 'Page.createIsolatedWorld', {'frameId': f, 'worldName': 'tab-lineage'})
+            except RuntimeError:   # 別のプロセスのフレーム (別に調べる) か, 消えたフレーム. 応答が無いときは下で None
+                continue
+            contexts.append(world['executionContextId'])
+        answers = []
+        for ctx in contexts:
+            res = _call(ws, next(n), 'Runtime.evaluate', {'expression': DIRTY, 'returnByValue': True,
+                                                         **({'contextId': ctx} if ctx is not None else {})})
+            got = None if 'exceptionDetails' in res else res.get('result', {}).get('value')
+            if got is True:
+                return True
+            answers.append(got)
+    except (Exception, SystemExit):   # 裏で凍結されて応答しない・閉じた直後など
+        return None
+    finally:
+        ws.close()
+    return False if all(a is False for a in answers) else None
+
+
+def form_state(port: int) -> dict[str, list[str]]:
+    """{'dirty': 入力しかけのページの URL, 'unknown': 中を調べられなかったページの URL}.
+    別のプロセスで動く iframe は別に調べ, 入っているページの結果にする.
+    接続先や ID が無い (DevTools を開いている) ・手元の外を指すページは調べずに unknown にする.
+    休止中のタブはページが無いので入らない (休止した時点で入力は残っていない)."""
+    from concurrent.futures import ThreadPoolExecutor
+    local = (f'ws://127.0.0.1:{port}/', f'ws://localhost:{port}/')
+    targets = _pages(port)
+    shown = [p for p in targets if p.get('type') == 'page' and p.get('url', '').startswith(('http://', 'https://', 'file://'))]
+    pages = {p['id']: p for p in shown if p.get('id')}
+    parent = {p['id']: p.get('parentId') for p in targets if p.get('type') == 'iframe' and p.get('id')}
+
+    def page_of(tid):
+        for _ in range(len(parent) + 1):   # iframe の中の iframe もたどる. 輪になっていても止まる
+            if tid in pages:
+                return tid
+            tid = parent.get(tid)
+        return None
+    probes = [(pid, p['webSocketDebuggerUrl']) for p in targets if (pid := page_of(p.get('id'))) is not None
+              and p.get('webSocketDebuggerUrl', '').startswith(local)]
+    with ThreadPoolExecutor(DIRTY_WORKERS) as pool:
+        got = list(pool.map(lambda x: _probe(x[1]), probes))
+    dirty = {pages[pid]['url'] for (pid, _), d in zip(probes, got) if d}
+    unknown = {pages[pid]['url'] for (pid, _), d in zip(probes, got) if d is None}
+    unknown |= {p['url'] for p in shown if not p.get('id') or not p.get('webSocketDebuggerUrl', '').startswith(local)}
+    return {'dirty': sorted(dirty), 'unknown': sorted(unknown - dirty)}
+
+
 def expression(arr: dict, hibernate: bool = True, settle_ms: int = 4000, close: bool = False,
-               quiet: bool = False) -> str:
-    """quiet: 選ばれているタブを動かさず, ワークスペースも切り替えない (auto が使う)."""
-    opts = {'hibernate': hibernate, 'settleMs': settle_ms, 'close': close, 'quiet': quiet}
+               quiet: bool = False, keep: list[str] = (), unsure: list[str] = (), recent_ms: int = 0) -> str:
+    """quiet: 選ばれているタブを動かさず, ワークスペースも切り替えない (auto が使う).
+    keep: 触らないタブの URL. unsure: 移すが閉じず休止させないタブの URL.
+    recent_ms: これ以内に見たタブにも触らない (0 なら見ない)."""
+    opts = {'hibernate': hibernate, 'settleMs': settle_ms, 'close': close, 'quiet': quiet,
+            'keep': list(keep), 'unsure': list(unsure), 'recentMs': recent_ms}
     # 既定の ensure_ascii で U+2028 なども ASCII のエスケープに直し, 式の中で文字列が切れないようにする
     return f'{JS}({json.dumps(arr)}, {json.dumps(opts)})'
 
 
-def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = False, quiet: bool = False) -> dict:
-    return evaluate(ui_page(port), expression(arr, hibernate, close=close, quiet=quiet))
+def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = False, quiet: bool = False,
+          recent_ms: int = 0) -> dict:
+    """適用の直前に入力しかけのタブを調べ, それには触らない."""
+    forms = form_state(port)
+    res = evaluate(ui_page(port), expression(arr, hibernate, close=close, quiet=quiet, keep=forms['dirty'],
+                                             unsure=forms['unknown'], recent_ms=recent_ms))
+    return {**res, 'dirty': len(forms['dirty']), 'unknown': len(forms['unknown'])}
 
 
 # ブックマークバーの root のフォルダの直下にあるリンク

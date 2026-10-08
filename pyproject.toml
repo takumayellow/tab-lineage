@@ -22,7 +22,7 @@ Homepage = "https://takumayellow.github.io/tab-lineage/"
 Source = "https://github.com/takumayellow/tab-lineage"
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "websocket-client>=1.6"]
 apply = ["websocket-client>=1.6"]
 
 [project.scripts]
