@@ -56,7 +56,8 @@ TABS = [tab(1, 'https://shown.example/', active=True),
         tab(5, 'https://noaccess.example/', lastAccessed=None),
         tab(6, 'https://frozen-search.example/'),
         tab(7, 'https://plain.example/'),
-        tab(8, 'https://search.example/')]
+        tab(8, 'https://search.example/'),
+        tab(9, 'https://frozen-search.example/', discarded=True)]   # 休止中: 調べられないが入力は残っていない
 ARR = {'workspaces': [{'name': 'A', 'items': [{'stack': None, 'tabs': [
            ['form', 'https://form.example/'], ['frozen', 'https://frozen.example/'], ['plain', 'https://plain.example/']]}]}],
        'close': [{'url': u} for u in ['https://form.example/', 'https://frozen-search.example/', 'https://search.example/']]}
@@ -81,6 +82,7 @@ def test_apply_never_touches_a_tab_with_unsaved_input_and_only_moves_unprobed_on
     assert 2 not in log['moved'] + log['removed'] + log['discarded']   # 入力しかけ: 案にも閉じる案にもあるが触らない
     assert 3 in log['moved'] and 3 not in log['discarded']   # 調べられなかった: 移すが休止させない
     assert 6 not in log['removed'] and 8 in log['removed']   # 調べられなかったものは閉じる案でも閉じない
+    assert 9 in log['removed']   # 同じ URL でも休止中のタブは閉じる
     assert 7 in log['moved'] and 7 in log['discarded']   # ふつうのタブは移して休止させる
     assert 'https://form.example/' not in log['created']   # 残したタブを開き直さない
     assert r['guarded'] == 1 and r['kept'] == 1
