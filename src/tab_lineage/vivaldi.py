@@ -78,8 +78,9 @@ JS = r'''
   const before = (await chrome.tabs.query({windowType: 'normal'})).map(t => ({...t, ext: extOf(t)}));
   // 固定したタブは移さず閉じず, 案にあっても開き直さない. quiet のときは各ウィンドウで選ばれているタブも同じ扱いにする.
   // 入力しかけのタブ (keep) と, recentMs 以内に見たタブ (操作中に整理するとき) も同じ扱い. 見た時刻が取れなければ見たものとする.
-  // 中を調べられなかったタブ (unsure) は移すが, 閉じず休止させない
+  // 中を調べられなかったタブ (unsure) は移すが, 閉じず休止させない. 休止中のタブはページが無いので調べられないが, 失う入力も無い
   const keep = new Set(opts.keep || []), unsure = new Set(opts.unsure || []);
+  const doubtful = t => unsure.has(urlOf(t)) && !t.discarded;
   const recent = t => opts.recentMs > 0 && (t.lastAccessed === undefined || Date.now() - t.lastAccessed < opts.recentMs);
   const stays = t => t.pinned || (opts.quiet && t.active) || keep.has(urlOf(t)) || recent(t);
   const guarded = before.filter(t => !t.pinned && !(opts.quiet && t.active) && stays(t)).length;
@@ -185,7 +186,7 @@ JS = r'''
   const shut = new Set([...(arr.close || []).map(c => c.url), ...marked]);
   for (const ts of pool.values()) {
     for (const t of ts) {
-      if (opts.close && shut.has(urlOf(t)) && !unsure.has(urlOf(t))) {
+      if (opts.close && shut.has(urlOf(t)) && !doubtful(t)) {
         try { await chrome.tabs.remove(t.id); closed++; } catch (e) { left.push([t.title, urlOf(t)]); }
       } else {
         left.push([t.title, urlOf(t)]);
@@ -219,7 +220,7 @@ JS = r'''
       if (t.ws === active) continue;
       try {
         const now = await chrome.tabs.get(t.id);
-        if (now.audible || unsure.has(urlOf(now))) continue;   // 音を出しているタブと, 中を調べられなかったタブは止めない
+        if (now.audible || doubtful(now)) continue;   // 音を出しているタブと, 中を調べられなかったタブは止めない
         await chrome.tabs.discard(t.id);
         hibernated++;
       } catch (e) { /* 読み込み中などで休止できないタブは残す */ }
