@@ -3,9 +3,15 @@
 適用の JS は Node で, Vivaldi の API の代わりの作り物の上で動かす. 入力しかけを調べる JS は headless の
 ブラウザでフォームのあるページに対して動かす. Node・Edge / Chrome が無い環境では飛ばす.
 """
+import contextlib
+import functools
+import http.server
 import json
 import shutil
 import subprocess
+import threading
+import time
+import urllib.request
 
 import pytest
 from test_viewer_e2e import BROWSER, SANDBOX
@@ -150,3 +156,62 @@ def test_dirty_finds_unsaved_input_and_ignores_untouched_forms(tmp_path):
     assert got == {'empty': False, 'typed': True, 'textarea': True, 'checked': True, 'selected': True,
                    'hidden': False, 'readonly': False, 'editable': True, 'blurred': None, 'blank': False,
                    'shadow': True, 'frame': True, 'unload': True}
+
+
+# 同じホストの別のポートは別のオリジンだが同じサイトなので, iframe は同じプロセスで動き, ページの中から読めない
+TOP = '<!doctype html><meta charset="utf-8"><body><iframe src="http://127.0.0.1:%d/%s"></iframe>'
+INNER = {'typed.html': '<input id=e value=a><script>document.getElementById("e").value = "z";</script>',
+         'clean.html': '<input id=e value=a>'}
+
+
+def wait_for(check, tries=60):
+    for _ in range(tries):
+        if (got := check()) is not None:
+            return got
+        time.sleep(0.5)
+    raise AssertionError('時間内に済まなかった')
+
+
+@contextlib.contextmanager
+def serve(root):
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.skipif(BROWSER is None, reason='Edge / Chrome が見つからない')
+def test_form_state_finds_input_in_a_frame_the_page_cannot_read(tmp_path):
+    pytest.importorskip('websocket')
+    top, inner, profile = tmp_path / 'top', tmp_path / 'inner', tmp_path / 'profile'
+    top.mkdir()
+    inner.mkdir()
+    for name, body in INNER.items():
+        (inner / name).write_text(body, encoding='utf-8')
+    with serve(inner) as inner_port, serve(top) as top_port:
+        for name in INNER:
+            (top / name).write_text(TOP % (inner_port, name), encoding='utf-8')
+        typed, clean = (f'http://127.0.0.1:{top_port}/{name}' for name in INNER)
+        # headless は URL を 2 つ渡すと起動しないので, 2 枚目は DevTools から開く
+        proc = subprocess.Popen([BROWSER, *SANDBOX, '--headless=new', '--disable-gpu', '--no-first-run',
+                                 f'--user-data-dir={profile}', '--remote-debugging-port=0', typed],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            active = profile / 'DevToolsActivePort'
+            port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+            urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/json/new?{clean}', method='PUT'),
+                                   timeout=10).close()
+
+            def settled():
+                got = vivaldi.form_state(port)
+                return got if got['dirty'] and not got['unknown'] else None
+            assert wait_for(settled) == {'dirty': [typed], 'unknown': []}
+            # iframe は別の接続先になっていない (ページの接続から調べるしかない)
+            assert not [t for t in vivaldi._pages(port) if t.get('type') == 'iframe']
+        finally:
+            proc.kill()
+            proc.wait(timeout=30)

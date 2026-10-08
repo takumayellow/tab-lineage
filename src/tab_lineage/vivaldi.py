@@ -20,6 +20,7 @@ Vivaldi を --remote-debugging-port=<port> --remote-debugging-address=127.0.0.1 
 """
 from __future__ import annotations
 
+import itertools
 import json
 import urllib.request
 
@@ -278,7 +279,7 @@ TABS = '''(async () => (await chrome.tabs.query({windowType: 'normal'})).map(t =
   url: t.pendingUrl || t.url, vivExtData: t.vivExtData, lastAccessed: t.lastAccessed})))()'''
 
 # ページで入力しかけのものがあるか. 値は返さず, 有れば true, 無ければ false, 分からなければ null を返す.
-# 同じオリジンの iframe と開いた shadow root の中も見る. 別のオリジンの iframe は form_state がそのフレームを別に調べる.
+# 同じオリジンの iframe と開いた shadow root の中も見る. 別のオリジンの iframe は _probe がフレームごとに調べる.
 # 選んでいない編集できる要素に文字があるときは, サイトの中身か書きかけか見分けられないので null. 調べて落ちたら true
 DIRTY = r'''(() => {
   const skip = new Set(['hidden', 'submit', 'button', 'reset', 'image']);
@@ -321,25 +322,66 @@ def tabs(port: int = 9222) -> list[dict]:
     return evaluate(ui_page(port), TABS)
 
 
+def _call(ws, n: int, method: str, params: dict | None = None) -> dict:
+    ws.send(json.dumps({'id': n, 'method': method, 'params': params or {}}))
+    while True:
+        msg = json.loads(ws.recv())
+        if msg.get('id') == n:
+            if 'error' in msg:
+                raise RuntimeError(msg['error'].get('message'))
+            return msg.get('result', {})
+
+
+def _child_frames(tree: dict):
+    for c in tree.get('childFrames', []):
+        yield c['frame']['id']
+        yield from _child_frames(c)
+
+
 def _probe(ws_url: str) -> bool | None:
-    """入力しかけなら True, 無ければ False, 調べられなければ None."""
+    """入力しかけなら True, 無ければ False, 調べられなければ None.
+    ページの中から読めない別のオリジンの iframe も, 同じプロセスで動くものは isolated world を作って調べる
+    (別のプロセスで動く iframe は form_state が別の接続先として調べる)."""
     try:
-        got = evaluate(ws_url, DIRTY, timeout=DIRTY_TIMEOUT)
+        import websocket
+        ws = websocket.create_connection(ws_url, timeout=DIRTY_TIMEOUT, suppress_origin=True)
+    except (Exception, SystemExit):   # 閉じた直後など
+        return None
+    try:
+        n = itertools.count(1)
+        tree = _call(ws, next(n), 'Page.getFrameTree')['frameTree']
+        contexts = [None]
+        for f in _child_frames(tree):
+            try:
+                world = _call(ws, next(n), 'Page.createIsolatedWorld', {'frameId': f, 'worldName': 'tab-lineage'})
+            except RuntimeError:   # 別のプロセスのフレーム (別に調べる) か, 消えたフレーム. 応答が無いときは下で None
+                continue
+            contexts.append(world['executionContextId'])
+        answers = []
+        for ctx in contexts:
+            res = _call(ws, next(n), 'Runtime.evaluate', {'expression': DIRTY, 'returnByValue': True,
+                                                         **({'contextId': ctx} if ctx is not None else {})})
+            got = None if 'exceptionDetails' in res else res.get('result', {}).get('value')
+            if got is True:
+                return True
+            answers.append(got)
     except (Exception, SystemExit):   # 裏で凍結されて応答しない・閉じた直後など
         return None
-    return got if isinstance(got, bool) else None
+    finally:
+        ws.close()
+    return False if all(a is False for a in answers) else None
 
 
 def form_state(port: int) -> dict[str, list[str]]:
     """{'dirty': 入力しかけのページの URL, 'unknown': 中を調べられなかったページの URL}.
     別のプロセスで動く iframe は別に調べ, 入っているページの結果にする.
-    接続先が無い (DevTools を開いている) ・手元の外を指すページは調べずに unknown にする.
+    接続先や ID が無い (DevTools を開いている) ・手元の外を指すページは調べずに unknown にする.
     休止中のタブはページが無いので入らない (休止した時点で入力は残っていない)."""
     from concurrent.futures import ThreadPoolExecutor
     local = (f'ws://127.0.0.1:{port}/', f'ws://localhost:{port}/')
     targets = _pages(port)
-    pages = {p['id']: p for p in targets if p.get('type') == 'page' and p.get('id')
-             and p.get('url', '').startswith(('http://', 'https://', 'file://'))}
+    shown = [p for p in targets if p.get('type') == 'page' and p.get('url', '').startswith(('http://', 'https://', 'file://'))]
+    pages = {p['id']: p for p in shown if p.get('id')}
     parent = {p['id']: p.get('parentId') for p in targets if p.get('type') == 'iframe' and p.get('id')}
 
     def page_of(tid):
@@ -354,7 +396,7 @@ def form_state(port: int) -> dict[str, list[str]]:
         got = list(pool.map(lambda x: _probe(x[1]), probes))
     dirty = {pages[pid]['url'] for (pid, _), d in zip(probes, got) if d}
     unknown = {pages[pid]['url'] for (pid, _), d in zip(probes, got) if d is None}
-    unknown |= {p['url'] for p in pages.values() if not p.get('webSocketDebuggerUrl', '').startswith(local)}
+    unknown |= {p['url'] for p in shown if not p.get('id') or not p.get('webSocketDebuggerUrl', '').startswith(local)}
     return {'dirty': sorted(dirty), 'unknown': sorted(unknown - dirty)}
 
 

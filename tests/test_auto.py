@@ -1,4 +1,6 @@
 import json
+import sys
+import types
 
 import pytest
 from _util import make_history, visit
@@ -296,33 +298,87 @@ def test_form_state_sorts_pages_into_dirty_and_unknown(monkeypatch):
         return {'id': str(n), 'type': kind, 'url': url, 'webSocketDebuggerUrl': f'ws://{host}:9242/devtools/page/{n}', **kw}
     no_ws = page(8, 'https://devtools-open.example/')
     del no_ws['webSocketDebuggerUrl']   # DevTools を開いているページには接続先が無い
+    no_id = page(13, 'https://no-id.example/')
+    del no_id['id']
     pages = [page(1, 'https://form.example/'), page(2, 'https://plain.example/'), page(3, 'https://frozen.example/'),
              page(4, 'https://far.example/', host='evil.example'), page(5, 'chrome-extension://x/main.html'),
              page(6, 'https://worker.example/', kind='service_worker'), page(7, 'https://host.example/'), no_ws,
              page(9, 'https://pay.example/frame', kind='iframe', parentId='10'),
              page(10, 'https://shop.example/frame', kind='iframe', parentId='7'),
              page(11, 'https://ad.example/', kind='iframe', parentId='2'),
-             page(12, 'https://loop.example/', kind='iframe', parentId='12')]
+             page(12, 'https://loop.example/', kind='iframe', parentId='12'), no_id]
     monkeypatch.setattr(vivaldi, '_pages', lambda port: pages)
     answers = {'1': True, '2': False, '3': None, '7': False, '9': True, '10': False, '11': False}
     probed = []
     monkeypatch.setattr(vivaldi, '_probe', lambda ws: probed.append(ws) or answers[ws.rsplit('/', 1)[1]])
     assert vivaldi.form_state(9242) == {
         'dirty': ['https://form.example/', 'https://host.example/'],   # iframe の中の iframe の入力は, 入っているページのもの
-        'unknown': ['https://devtools-open.example/', 'https://far.example/', 'https://frozen.example/']}
+        'unknown': ['https://devtools-open.example/', 'https://far.example/', 'https://frozen.example/',
+                    'https://no-id.example/']}
     # 手元の外の接続先・ページでないもの・どのページにも入っていない iframe は調べない
     assert sorted(int(ws.rsplit('/', 1)[1]) for ws in probed) == [1, 2, 3, 7, 9, 10, 11]
 
 
+class FakeSocket:
+    """DevTools の接続の作り物. frames は子フレームの ID, answers は文脈 (None が本体) ごとの DIRTY の答え."""
+
+    def __init__(self, frames=(), answers=None, fail=None, gone=()):
+        self.frames, self.answers, self.fail, self.gone, self.out, self.sent = frames, answers or {}, fail, gone, [], []
+
+    def send(self, raw):
+        msg = json.loads(raw)
+        self.sent.append(msg)
+        method, params = msg['method'], msg['params']
+        if method == self.fail:
+            raise TimeoutError()
+        if method == 'Page.getFrameTree':
+            result = {'frameTree': {'frame': {'id': 'top'}, 'childFrames': [
+                {'frame': {'id': f}, 'childFrames': [{'frame': {'id': f + '/inner'}}]} for f in self.frames]}}
+        elif method == 'Page.createIsolatedWorld' and params['frameId'] in self.gone:
+            self.out.append(json.dumps({'id': msg['id'], 'error': {'message': 'No frame for given id found'}}))
+            return
+        elif method == 'Page.createIsolatedWorld':
+            result = {'executionContextId': params['frameId']}
+        else:
+            got = self.answers.get(params.get('contextId'), False)
+            result = {'exceptionDetails': {}} if got == 'throw' else {'result': {'value': got}}
+        self.out += [json.dumps({'method': 'Runtime.consoleAPICalled'}), json.dumps({'id': msg['id'], 'result': result})]
+
+    def recv(self):
+        return self.out.pop(0)
+
+    def close(self):
+        pass
+
+
+def probe_with(monkeypatch, sock):
+    monkeypatch.setitem(sys.modules, 'websocket', types.SimpleNamespace(create_connection=lambda *a, **k: sock))
+    return vivaldi._probe('ws://127.0.0.1:1/x')
+
+
+def test_probe_checks_every_frame_in_the_page_process(monkeypatch):
+    assert probe_with(monkeypatch, FakeSocket(frames=['a', 'b'])) is False
+    sock = FakeSocket(frames=['a', 'b'], answers={'b/inner': True})
+    assert probe_with(monkeypatch, sock) is True   # 中から読めない iframe の中の iframe の入力も見つける
+    worlds = [m['params']['frameId'] for m in sock.sent if m['method'] == 'Page.createIsolatedWorld']
+    assert worlds == ['a', 'a/inner', 'b', 'b/inner']
+    assert probe_with(monkeypatch, FakeSocket(answers={None: True})) is True
+    # 別のプロセスのフレームと消えたフレームは飛ばし, 残りで決める
+    assert probe_with(monkeypatch, FakeSocket(frames=['a', 'b'], gone={'a'})) is False
+    assert probe_with(monkeypatch, FakeSocket(frames=['a', 'b'], gone={'a'}, answers={'b/inner': True})) is True
+
+
 def test_probe_treats_a_failure_or_odd_answer_as_unknown(monkeypatch):
-    def stuck(ws, expr, timeout):
-        raise TimeoutError()
-    monkeypatch.setattr(vivaldi, 'evaluate', stuck)
+    def refused(*a, **k):
+        raise ConnectionRefusedError()
+    monkeypatch.setitem(sys.modules, 'websocket', types.SimpleNamespace(create_connection=refused))
     assert vivaldi._probe('ws://127.0.0.1:1/x') is None
-    monkeypatch.setattr(vivaldi, 'evaluate', lambda ws, expr, timeout: 'yes')
-    assert vivaldi._probe('ws://127.0.0.1:1/x') is None
-    monkeypatch.setattr(vivaldi, 'evaluate', lambda ws, expr, timeout: False)
-    assert vivaldi._probe('ws://127.0.0.1:1/x') is False
+    assert probe_with(monkeypatch, FakeSocket(fail='Page.getFrameTree')) is None   # 凍結して応答しない
+    assert probe_with(monkeypatch, FakeSocket(frames=['a'], fail='Page.createIsolatedWorld')) is None
+    assert probe_with(monkeypatch, FakeSocket(frames=['a'], answers={'a': None})) is None
+    assert probe_with(monkeypatch, FakeSocket(frames=['a'], answers={'a': 'yes'})) is None
+    assert probe_with(monkeypatch, FakeSocket(frames=['a'], answers={'a': 'throw'})) is None
+    assert probe_with(monkeypatch, FakeSocket(frames=['a'], answers={'a': None, 'a/inner': True})) is True
 
 
 def test_apply_leaves_dirty_tabs_alone_and_reports_the_counts(monkeypatch):
