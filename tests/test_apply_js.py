@@ -86,6 +86,7 @@ def test_apply_never_touches_a_tab_with_unsaved_input_and_only_moves_unprobed_on
     assert 7 in log['moved'] and 7 in log['discarded']   # ふつうのタブは移して休止させる
     assert 'https://form.example/' not in log['created']   # 残したタブを開き直さない
     assert r['guarded'] == 1 and r['kept'] == 1
+    assert r['doubted'] == 2   # 休止中のタブは数えない
 
 
 @pytest.mark.skipif(NODE is None, reason='node が見つからない')

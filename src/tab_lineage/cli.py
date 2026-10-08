@@ -147,7 +147,7 @@ def apply_report(res: dict, close: bool) -> list[str]:
              f'(既にあった {res["bookmarks"]["skipped"]} 件は足さない), 閉じた {res["closed"]} 枚, 休止 {res["hibernated"]} 枚']
     if res.get('guarded') or res.get('unknown'):
         lines.append(f'触らなかったタブ {res.get("guarded", 0)} 枚 (入力しかけ {res.get("dirty", 0)} ページ・最近見たタブ), '
-                     f'中を調べられず閉じも休止もしなかったページ {res.get("unknown", 0)} 枚')
+                     f'中を調べられず閉じも休止もしなかったタブ {res.get("unknown", 0)} 枚')
     lines += [f'できなかった: {f}' for f in res['failed']]
     if res['created']:
         lines.append('作ったワークスペース: ' + ', '.join(res['created']))
