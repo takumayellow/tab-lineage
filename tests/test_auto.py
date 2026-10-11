@@ -32,9 +32,10 @@ def live(monkeypatch):
     monkeypatch.setattr(auto, 'idle_seconds', lambda: 3600)
     monkeypatch.setattr(vivaldi, 'tabs', lambda port: calls.append(('tabs', port)) or TABS)
 
-    def apply(arr, port, close, quiet, recent_ms=0):
+    def apply(arr, port, close, quiet, recent_ms=0, stale_ms=0):
         calls.append(('apply', port, close, quiet))
         calls.append(('recent', recent_ms))
+        calls.append(('stale', stale_ms))
         return RESULT
     monkeypatch.setattr(vivaldi, 'apply', apply)
     return calls
@@ -124,6 +125,7 @@ def test_run_applies_quietly_and_remembers_the_tabs(tmp_path, profile, live):
     assert saved['urls'] == auto.url_marks(TABS) and len(saved['urls']) == 2   # 固定したタブは数えない
     assert not any('docs.example' in u for u in saved['urls'])   # URL そのものは残さない
     assert ('recent', 0) in live   # 操作していないので, 最近見たタブも整理する
+    assert ('stale', auto.STALE_HOURS * 3_600_000) in live   # 裏のウィンドウに残ったタブを集める
     with pytest.raises(auto.Skip, match='変わっていない'):
         auto.run(state, 9242, profile)
 
@@ -180,7 +182,7 @@ def test_run_remembers_the_tabs_after_apply_not_before(tmp_path, profile, live, 
 def test_run_does_not_remember_an_apply_that_placed_nothing(tmp_path, profile, live, monkeypatch):
     state = tmp_path / 'state'
     state.mkdir()
-    monkeypatch.setattr(vivaldi, 'apply', lambda arr, port, close, quiet, recent_ms=0: dict(
+    monkeypatch.setattr(vivaldi, 'apply', lambda arr, port, close, quiet, recent_ms=0, stale_ms=0: dict(
         RESULT, adopted=0, failed=['pandas merge: 開けない']))
     with pytest.raises(RuntimeError, match='1 枚も置けなかった'):
         auto.run(state, 9242, profile)
@@ -288,9 +290,9 @@ def test_apply_report_says_what_it_left_alone():
 
 def test_expression_passes_the_tabs_to_leave_alone():
     expr = vivaldi.expression({'workspaces': []}, keep=['https://a.example/'], unsure=['https://b.example/'],
-                              recent_ms=1800000)
+                              recent_ms=1800000, stale_ms=7)
     assert '"keep": ["https://a.example/"]' in expr and '"unsure": ["https://b.example/"]' in expr
-    assert '"recentMs": 1800000' in expr
+    assert '"recentMs": 1800000' in expr and '"staleMs": 7' in expr
 
 
 def test_form_state_sorts_pages_into_dirty_and_unknown(monkeypatch):

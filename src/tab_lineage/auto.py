@@ -7,6 +7,7 @@
   2. Vivaldi がデバッグのポートを開いている
   3. 前の整理のあと, 開いているタブの URL が変わった. 手でタブを並べ替えただけなら整理し直さない
 適用は quiet で行う. 各ウィンドウで選ばれているタブと固定したタブは動かさず, ワークスペースも切り替えない.
+ただし最後に使ったウィンドウの外で STALE_HOURS 時間より前に見たきりのタブは, タブの一番多いウィンドウへ集める.
 入力しかけのページは閉じも休止もしない (vivaldi.apply).
 セッションファイルの代わりに, 起動中の Vivaldi から今のタブを読む (起動中はセッションファイルを読めない).
 案と適用前の控えは <state>/runs/<日時>/ に残す. URL と題名がそのまま入るので公開しない.
@@ -25,6 +26,7 @@ from . import arrange, config, plan, session, snapshot, vivaldi
 
 KEEP_RUNS = 14
 LOG_MAX = 512 * 1024
+STALE_HOURS = 3   # ほかのウィンドウで選ばれていても, これより前に見たきりのタブは集める
 
 
 class Skip(Exception):
@@ -177,7 +179,8 @@ def run(state: pathlib.Path, port: int, profile: pathlib.Path, config_path: str 
     lines = ([f'操作中なので, {idle_min:g} 分以内に見たタブには触らない'] if busy else []) + [arrange.outline(arr)]
     if dry_run:
         return lines
-    res = vivaldi.apply(arr, port=port, close=close, quiet=True, recent_ms=int(idle_min * 60_000) if busy else 0)
+    res = vivaldi.apply(arr, port=port, close=close, quiet=True, recent_ms=int(idle_min * 60_000) if busy else 0,
+                        stale_ms=STALE_HOURS * 3_600_000)
     lines += apply_report(res, close)
     if res['failed'] and not (res['adopted'] or res['already'] or res['made']):
         # 1 枚も置けなかった. 済んだことにせず, 次の回にやり直す
