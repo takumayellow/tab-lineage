@@ -57,14 +57,21 @@ JS = r'''
     createdWs.push(w.name);
   }
 
+  const extOf = t => { try { return JSON.parse(t.vivExtData || '{}'); } catch (e) { return {}; } };
+  const urlOf = t => t.pendingUrl || t.url;
+  const before = (await chrome.tabs.query({windowType: 'normal'})).map(t => ({...t, ext: extOf(t)}));
   // スクリプトから作ったウィンドウは画面の準備が終わらず, スタックもワークスペースの切り替えも効かない.
-  // ワークスペースがウィンドウの中を分けるので, 最後に使っていたウィンドウへ足す
-  const win = await chrome.windows.getLastFocused({windowTypes: ['normal']});
+  // ワークスペースがウィンドウの中を分けるので, 開いているウィンドウへ足す. 手で適用したときは最後に使っていたウィンドウ.
+  // quiet のときはタブの一番多いウィンドウ. 最後に使っていたウィンドウにすると, 大きなウィンドウが 2 つあるとき回ごとに行き来する
+  const focused = await chrome.windows.getLastFocused({windowTypes: ['normal']});
+  const counts = new Map();
+  for (const t of before) counts.set(t.windowId, (counts.get(t.windowId) || 0) + 1);
+  const largest = [...counts].sort((a, b) => b[1] - a[1] || (b[0] === focused.id) - (a[0] === focused.id) || a[0] - b[0])[0];
+  const win = opts.quiet && largest ? {id: largest[0]} : focused;
   const setWorkspace = async (tabId, wsId) => {
     const ext = JSON.parse((await chrome.tabs.get(tabId)).vivExtData || '{}');
     if (ext.workspaceId !== wsId) await chrome.tabs.update(tabId, {vivExtData: JSON.stringify({...ext, workspaceId: wsId})});
   };
-  const extOf = t => { try { return JSON.parse(t.vivExtData || '{}'); } catch (e) { return {}; } };
   // 適用先のウィンドウにあるタブを元のスタックから外して末尾へ置く. 残すと新しいスタックが元のスタックの続きになる.
   // vivExtData の group を消しても外れないので, 画面の「スタックから外す」と同じ move を使う
   const unstack = async tabId => {
@@ -74,16 +81,19 @@ JS = r'''
   };
 
   // 開いているタブを URL ごとに並べる. 案のタブはまずここから引き取り, 無いときだけ作る
-  const urlOf = t => t.pendingUrl || t.url;
-  const before = (await chrome.tabs.query({windowType: 'normal'})).map(t => ({...t, ext: extOf(t)}));
   // 固定したタブは移さず閉じず, 案にあっても開き直さない. quiet のときは各ウィンドウで選ばれているタブも同じ扱いにする.
+  // ただし最後に使ったウィンドウと適用先のウィンドウの外のタブ 1 枚のウィンドウで, staleMs より前に見たきり音も出していないタブは移す.
+  // 残すとそのウィンドウがいつまでも残る. 何枚もあるウィンドウは, ほかのタブを移して 1 枚になってから次の回に移す
   // 入力しかけのタブ (keep) と, recentMs 以内に見たタブ (操作中に整理するとき) も同じ扱い. 見た時刻が取れなければ見たものとする.
   // 中を調べられなかったタブ (unsure) は移すが, 閉じず休止させない. 休止中のタブはページが無いので調べられないが, 失う入力も無い
   const keep = new Set(opts.keep || []), unsure = new Set(opts.unsure || []);
   const doubtful = t => unsure.has(urlOf(t)) && !t.discarded;
   const recent = t => opts.recentMs > 0 && (t.lastAccessed === undefined || Date.now() - t.lastAccessed < opts.recentMs);
-  const stays = t => t.pinned || (opts.quiet && t.active) || keep.has(urlOf(t)) || recent(t);
-  const guarded = before.filter(t => !t.pinned && !(opts.quiet && t.active) && stays(t)).length;
+  const leftBehind = t => opts.staleMs > 0 && t.windowId !== focused.id && t.windowId !== win.id && counts.get(t.windowId) === 1 && !t.audible &&
+    t.lastAccessed !== undefined && Date.now() - t.lastAccessed > opts.staleMs;
+  const shownTab = t => opts.quiet && t.active && !leftBehind(t);
+  const stays = t => t.pinned || shownTab(t) || keep.has(urlOf(t)) || recent(t);
+  const guarded = before.filter(t => !t.pinned && !shownTab(t) && stays(t)).length;
   const doubted = before.filter(doubtful).length;
   const pinned = new Set(before.filter(stays).map(urlOf));
   const pool = new Map();
@@ -297,7 +307,17 @@ DIRTY = r'''(() => {
     for (const e of doc.querySelectorAll('input, textarea, select')) {
       if (e.disabled || e.readOnly) continue;
       if (e.tagName === 'SELECT') {
-        if ([...e.options].some(o => o.selected !== o.defaultSelected)) return true;
+        // selected の無い 1 行の select は先頭の (無効でない) 項目が選ばれた状態で始まる. defaultSelected と比べるだけだと変えたことになる.
+        // 1 つ選ぶ select で何も選ばれていないのはページが外したときだけで, 人の操作ではそうならない
+        const opts = [...e.options];
+        let start = opts.map(o => o.defaultSelected);
+        if (!e.multiple && e.size <= 1) {
+          if (e.selectedIndex < 0) continue;
+          const usable = o => !o.disabled && !(o.parentElement?.tagName === 'OPTGROUP' && o.parentElement.disabled);
+          const k = start.lastIndexOf(true) >= 0 ? start.lastIndexOf(true) : opts.findIndex(usable);
+          start = opts.map((o, i) => i === k);
+        }
+        if (opts.some((o, i) => o.selected !== start[i])) return true;
         continue;
       }
       const type = (e.type || '').toLowerCase();
@@ -313,7 +333,8 @@ DIRTY = r'''(() => {
     }
     return false;
   };
-  try { return typeof window.onbeforeunload === 'function' || dirty(document) || (maybe ? null : false); } catch (e) { return true; }
+  // onbeforeunload は入力が無くても置くサイトが多い (Amazon は全部のページ). 置いてあるだけでは決めず, 調べられなかった扱いにする
+  try { return dirty(document) || (maybe || typeof window.onbeforeunload === 'function' ? null : false); } catch (e) { return true; }
 })()'''
 DIRTY_TIMEOUT = 2   # 応答するページは 0.1 秒もかからない. 凍結したページは待っても応答しない
 DIRTY_WORKERS = 16
@@ -403,22 +424,25 @@ def form_state(port: int) -> dict[str, list[str]]:
 
 
 def expression(arr: dict, hibernate: bool = True, settle_ms: int = 4000, close: bool = False,
-               quiet: bool = False, keep: list[str] = (), unsure: list[str] = (), recent_ms: int = 0) -> str:
-    """quiet: 選ばれているタブを動かさず, ワークスペースも切り替えない (auto が使う).
+               quiet: bool = False, keep: list[str] = (), unsure: list[str] = (), recent_ms: int = 0,
+               stale_ms: int = 0) -> str:
+    """quiet: 選ばれているタブを動かさず, ワークスペースも切り替えない. タブの一番多いウィンドウへ集める (auto が使う).
     keep: 触らないタブの URL. unsure: 移すが閉じず休止させないタブの URL.
-    recent_ms: これ以内に見たタブにも触らない (0 なら見ない)."""
+    recent_ms: これ以内に見たタブにも触らない (0 なら見ない).
+    stale_ms: quiet でも, 最後に使ったウィンドウの外でこれより前に見たきりの選ばれているタブは移す (0 なら移さない)."""
     opts = {'hibernate': hibernate, 'settleMs': settle_ms, 'close': close, 'quiet': quiet,
-            'keep': list(keep), 'unsure': list(unsure), 'recentMs': recent_ms}
+            'keep': list(keep), 'unsure': list(unsure), 'recentMs': recent_ms, 'staleMs': stale_ms}
     # 既定の ensure_ascii で U+2028 なども ASCII のエスケープに直し, 式の中で文字列が切れないようにする
     return f'{JS}({json.dumps(arr)}, {json.dumps(opts)})'
 
 
 def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = False, quiet: bool = False,
-          recent_ms: int = 0) -> dict:
+          recent_ms: int = 0, stale_ms: int = 0) -> dict:
     """適用の直前に入力しかけのタブを調べ, それには触らない."""
     forms = form_state(port)
     res = evaluate(ui_page(port), expression(arr, hibernate, close=close, quiet=quiet, keep=forms['dirty'],
-                                             unsure=forms['unknown'], recent_ms=recent_ms))
+                                             unsure=forms['unknown'], recent_ms=recent_ms,
+                                             stale_ms=stale_ms))
     return {**res, 'dirty': len(forms['dirty']), 'unknown': res.get('doubted', 0)}
 
 

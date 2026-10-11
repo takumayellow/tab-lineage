@@ -20,7 +20,7 @@ from tab_lineage import vivaldi
 NODE = shutil.which('node')
 
 FAKE = r'''
-const log = {moved: [], removed: [], discarded: [], created: []};
+const log = {moved: [], to: [], removed: [], discarded: [], created: []};
 const tabs = new Map(TABS.map(t => [t.id, {...t}]));
 globalThis.self = globalThis;
 globalThis.vivaldi = {
@@ -28,12 +28,12 @@ globalThis.vivaldi = {
   tabsPrivate: {move: async () => ({group: 'g'}), setGroupProperties: async () => {}},
 };
 globalThis.chrome = {
-  windows: {getLastFocused: async () => ({id: 1})},
+  windows: {getLastFocused: async () => ({id: FOCUSED})},
   tabs: {
     query: async () => [...tabs.values()].map(t => ({...t})),
     get: async id => ({...tabs.get(id)}),
     update: async (id, p) => { Object.assign(tabs.get(id), p); },
-    move: async (id, p) => { log.moved.push(id); },
+    move: async (id, p) => { log.moved.push(id); log.to.push(p.windowId); tabs.get(id).windowId = p.windowId; },
     remove: async id => { log.removed.push(id); tabs.delete(id); },
     discard: async id => { log.discarded.push(id); },
     create: async p => { log.created.push(p.url); const t = {id: 100 + log.created.length, ...p}; tabs.set(t.id, t); return t; },
@@ -41,7 +41,7 @@ globalThis.chrome = {
 };
 '''
 
-OLD = 1_000   # ずっと前に見たタブの lastAccessed (ミリ秒)
+OLD = 1_000   # ずっと前に見たタブの lastAccessed (ミリ秒). 'now' は今見たタブ, None は見た時刻が無いタブ
 
 
 def tab(i, url, **kw):
@@ -52,7 +52,7 @@ def tab(i, url, **kw):
 TABS = [tab(1, 'https://shown.example/', active=True),
         tab(2, 'https://form.example/'),
         tab(3, 'https://frozen.example/'),
-        tab(4, 'https://recent.example/', lastAccessed=None),   # 今見たタブ. 下で今の時刻に置き換える
+        tab(4, 'https://recent.example/', lastAccessed='now'),
         tab(5, 'https://noaccess.example/', lastAccessed=None),
         tab(6, 'https://frozen-search.example/'),
         tab(7, 'https://plain.example/'),
@@ -63,11 +63,12 @@ ARR = {'workspaces': [{'name': 'A', 'items': [{'stack': None, 'tabs': [
        'close': [{'url': u} for u in ['https://form.example/', 'https://frozen-search.example/', 'https://search.example/']]}
 
 
-def run(recent_ms: int) -> dict:
-    expr = vivaldi.expression(ARR, settle_ms=0, close=True, quiet=True, keep=['https://form.example/'],
-                              unsure=['https://frozen.example/', 'https://frozen-search.example/'], recent_ms=recent_ms)
-    src = (f'const TABS = {json.dumps(TABS)};\n'
-           'TABS.forEach(t => { if (t.url === "https://recent.example/") t.lastAccessed = Date.now() - 1000;'
+def run(recent_ms: int = 0, tabs: list[dict] = TABS, arr: dict = ARR, focused: int = 1, stale_ms: int = 0) -> dict:
+    expr = vivaldi.expression(arr, settle_ms=0, close=True, quiet=True, keep=['https://form.example/'],
+                              unsure=['https://frozen.example/', 'https://frozen-search.example/'], recent_ms=recent_ms,
+                              stale_ms=stale_ms)
+    src = (f'const TABS = {json.dumps(tabs)};\nconst FOCUSED = {focused};\n'
+           'TABS.forEach(t => { if (t.lastAccessed === "now") t.lastAccessed = Date.now() - 1000;'
            ' else if (t.lastAccessed === null) delete t.lastAccessed; });\n'
            f'{FAKE}\n{expr}.then(r => console.log(JSON.stringify({{r, log}})));')
     out = subprocess.run([NODE, '-'], input=src, capture_output=True, text=True, encoding='utf-8', timeout=30)
@@ -99,6 +100,38 @@ def test_apply_while_active_spares_recent_tabs_and_tabs_without_an_access_time()
     assert busy['adopted'] == plain['adopted'] == 2   # ずっと前に見たタブは操作中でも移す
 
 
+# ウィンドウ 1: 最後に使ったが 1 枚だけ. ウィンドウ 2: 一番多い. ウィンドウ 3〜5, 7: 選ばれているタブ 1 枚ずつ. ウィンドウ 6: 2 枚
+STRAYS = [tab(1, 'https://here.example/', active=True),
+          tab(2, 'https://main-a.example/', windowId=2, active=True), tab(3, 'https://main-b.example/', windowId=2),
+          tab(4, 'https://main-c.example/', windowId=2),
+          tab(5, 'https://old.example/', windowId=3, active=True),
+          tab(6, 'https://playing.example/', windowId=4, active=True, audible=True),
+          tab(7, 'https://lately.example/', windowId=5, active=True, lastAccessed='now'),
+          tab(8, 'https://pair-a.example/', windowId=6, active=True), tab(9, 'https://pair-b.example/', windowId=6),
+          tab(10, 'https://form.example/', windowId=7, active=True)]   # 入力しかけ
+STRAY_ARR = {'workspaces': [{'name': 'A', 'items': [{'stack': None, 'tabs': [[t['url'], t['url']] for t in STRAYS]}]}]}
+
+
+@pytest.mark.skipif(NODE is None, reason='node が見つからない')
+def test_quiet_gathers_into_the_largest_window_and_takes_tabs_left_in_other_windows():
+    got = run(tabs=STRAYS, arr=STRAY_ARR, stale_ms=60_000)
+    log, r = got['log'], got['r']
+    assert r['window'] == 2 and set(log['to']) == {2}   # 最後に使ったウィンドウ 1 ではなく, 一番多い 2 へ集める
+    assert 5 in log['moved']   # ほかのウィンドウで前に見たきりのタブは, 選ばれていても移す
+    assert 1 not in log['moved']   # 最後に使ったウィンドウで選ばれているタブは, 前に見たきりでも動かさない
+    assert 6 not in log['moved'] and 7 not in log['moved']   # 音を出しているタブと最近見たタブも動かさない
+    assert 2 not in log['moved']   # 集める先で選ばれているタブもそのまま
+    assert 9 in log['moved'] and 8 not in log['moved']   # 2 枚のウィンドウは選ばれていないタブだけ移す
+    assert 10 not in log['moved']   # 入力しかけのタブは前に見たきりでも動かさない
+    assert r['kept'] == 6   # 1, 2, 6, 7, 8, 10 は案にあっても開き直さない
+
+
+@pytest.mark.skipif(NODE is None, reason='node が見つからない')
+def test_quiet_keeps_every_selected_tab_without_stale_ms():
+    log = run(tabs=STRAYS, arr=STRAY_ARR)['log']
+    assert not {1, 2, 5, 6, 7, 8, 10} & set(log['moved'])
+
+
 FORMS = r'''<!doctype html><meta charset="utf-8"><body><pre id="out"></pre><script>
 const DIRTY = %s;
 const cases = {
@@ -107,6 +140,10 @@ const cases = {
   textarea: '<textarea id="e">b</textarea>',
   checked: '<input id="e" type="checkbox">',
   selected: '<select id="e"><option>x</option><option>y</option></select>',
+  untouched: '<select><option>x</option><option>y</option></select><select><option disabled>-</option><option>z</option></select>'
+             + '<select multiple><option>x</option></select><select size="3"><option>x</option></select>'
+             + '<select><optgroup disabled><option>-</option></optgroup><option>z</option></select>',
+  unselected: '<select id="e"><option>x</option><option>y</option></select>',
   hidden: '<input id="e" type="hidden" value="a">',
   readonly: '<input id="e" value="a" readonly>',
   editable: '<div id="e" contenteditable>draft</div>',
@@ -121,6 +158,7 @@ const change = {
   textarea: d => { d.getElementById('e').value = 'b!'; },
   checked: d => { d.getElementById('e').checked = true; },
   selected: d => { d.getElementById('e').selectedIndex = 1; },
+  unselected: d => { d.getElementById('e').selectedIndex = -1; },
   hidden: d => { d.getElementById('e').value = 'z'; },
   readonly: d => { d.getElementById('e').value = 'z'; },
   editable: d => { d.getElementById('e').focus(); },
@@ -158,7 +196,7 @@ def test_dirty_finds_unsaved_input_and_ignores_untouched_forms(tmp_path):
     got = json.loads(dom[dom.index('<pre id="out">') + len('<pre id="out">'):dom.index('</pre>')])
     assert got == {'empty': False, 'typed': True, 'textarea': True, 'checked': True, 'selected': True,
                    'hidden': False, 'readonly': False, 'editable': True, 'blurred': None, 'blank': False,
-                   'shadow': True, 'frame': True, 'unload': True}
+                   'shadow': True, 'frame': True, 'unload': None, 'untouched': False, 'unselected': False}
 
 
 # 同じホストの別のポートは別のオリジンだが同じサイトなので, iframe は同じプロセスで動き, ページの中から読めない
