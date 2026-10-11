@@ -292,10 +292,15 @@ TABS = '''(async () => (await chrome.tabs.query({windowType: 'normal'})).map(t =
 
 # ページで入力しかけのものがあるか. 値は返さず, 有れば true, 無ければ false, 分からなければ null を返す.
 # 同じオリジンの iframe と開いた shadow root の中も見る. 別のオリジンの iframe は _probe がフレームごとに調べる.
-# 選んでいない編集できる要素に文字があるときは, サイトの中身か書きかけか見分けられないので null. 調べて落ちたら true
+# 選んでいない編集できる要素に文字があるときは, サイトの中身か書きかけか見分けられないので null. 調べて落ちたら true.
+# 値が初めと違っても, 人が触った印 (:user-valid / :user-invalid) が無く選んでもいない欄は, ページのスクリプトが入れた値
+# (検索結果の検索欄など) か, 再起動で戻った値なので null. 印は人が打って欄を離れたとき, 選ぶ欄は選んだときに付く
 DIRTY = r'''(() => {
   const skip = new Set(['hidden', 'submit', 'button', 'reset', 'image']);
+  const marks = (() => { try { return CSS.supports('selector(:user-valid)'); } catch (e) { return false; } })();
+  const touched = e => !marks || e.matches(':user-valid, :user-invalid') || e.getRootNode().activeElement === e;
   let maybe = false;
+  const changed = e => { if (touched(e)) return true; maybe = true; return false; };
   const dirty = doc => {
     for (const e of doc.querySelectorAll('[contenteditable]')) {
       if (!e.isContentEditable || (e.parentElement && e.parentElement.isContentEditable)) continue;
@@ -317,14 +322,14 @@ DIRTY = r'''(() => {
           const k = start.lastIndexOf(true) >= 0 ? start.lastIndexOf(true) : opts.findIndex(usable);
           start = opts.map((o, i) => i === k);
         }
-        if (opts.some((o, i) => o.selected !== start[i])) return true;
+        if (opts.some((o, i) => o.selected !== start[i]) && changed(e)) return true;
         continue;
       }
       const type = (e.type || '').toLowerCase();
       if (skip.has(type)) continue;
-      if (type === 'checkbox' || type === 'radio') { if (e.checked !== e.defaultChecked) return true; continue; }
+      if (type === 'checkbox' || type === 'radio') { if (e.checked !== e.defaultChecked && changed(e)) return true; continue; }
       if (type === 'file') { if (e.files && e.files.length) return true; continue; }
-      if (e.value !== e.defaultValue) return true;
+      if (e.value !== e.defaultValue && changed(e)) return true;
     }
     for (const f of doc.querySelectorAll('iframe, frame')) {
       let d = null;
@@ -333,8 +338,12 @@ DIRTY = r'''(() => {
     }
     return false;
   };
-  // onbeforeunload は入力が無くても置くサイトが多い (Amazon は全部のページ). 置いてあるだけでは決めず, 調べられなかった扱いにする
-  try { return dirty(document) || (maybe || typeof window.onbeforeunload === 'function' ? null : false); } catch (e) { return true; }
+  // onbeforeunload は入力が無くても置くサイトが多い (Amazon は全部のページ). 置いてあるだけでは決めず, 調べられなかった扱いにする.
+  // ただし開いてから一度もクリックもキー入力もされていないページでは, 人の入力は無い (ブラウザも離脱の確認を出さない)
+  const used = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+  try {
+    return dirty(document) || (maybe || (used && typeof window.onbeforeunload === 'function') ? null : false);
+  } catch (e) { return true; }
 })()'''
 DIRTY_TIMEOUT = 2   # 応答するページは 0.1 秒もかからない. 凍結したページは待っても応答しない
 DIRTY_WORKERS = 16

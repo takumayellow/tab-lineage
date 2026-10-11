@@ -152,19 +152,21 @@ const cases = {
   shadow: '<div id="h"></div>',
   frame: '<iframe id="f" srcdoc="<input id=e value=a>"></iframe>',
   unload: '',
+  scripted: '<input id="e" value="a"><select id="s"><option>x</option><option>y</option></select><input id="c" type="checkbox">',
 };
 const change = {
-  typed: d => { d.getElementById('e').value = 'a!'; },
-  textarea: d => { d.getElementById('e').value = 'b!'; },
-  checked: d => { d.getElementById('e').checked = true; },
-  selected: d => { d.getElementById('e').selectedIndex = 1; },
+  typed: d => { d.getElementById('e').value = 'a!'; d.getElementById('e').focus(); },
+  textarea: d => { d.getElementById('e').value = 'b!'; d.getElementById('e').focus(); },
+  checked: d => { d.getElementById('e').checked = true; d.getElementById('e').focus(); },
+  selected: d => { d.getElementById('e').selectedIndex = 1; d.getElementById('e').focus(); },
   unselected: d => { d.getElementById('e').selectedIndex = -1; },
   hidden: d => { d.getElementById('e').value = 'z'; },
   readonly: d => { d.getElementById('e').value = 'z'; },
   editable: d => { d.getElementById('e').focus(); },
   shadow: d => { const r = d.getElementById('h').attachShadow({mode: 'open'}); r.innerHTML = '<input value="a">';
-                 r.querySelector('input').value = 'z'; },
-  frame: d => { d.getElementById('f').contentDocument.getElementById('e').value = 'z'; },
+                 r.querySelector('input').value = 'z'; r.querySelector('input').focus(); },
+  frame: d => { const e = d.getElementById('f').contentDocument.getElementById('e'); e.value = 'z'; e.focus(); },
+  scripted: d => { d.getElementById('e').value = 'z'; d.getElementById('s').selectedIndex = 1; d.getElementById('c').checked = true; },
   unload: (d, w) => { w.onbeforeunload = () => 'x'; },
 };
 (async () => {
@@ -196,12 +198,70 @@ def test_dirty_finds_unsaved_input_and_ignores_untouched_forms(tmp_path):
     got = json.loads(dom[dom.index('<pre id="out">') + len('<pre id="out">'):dom.index('</pre>')])
     assert got == {'empty': False, 'typed': True, 'textarea': True, 'checked': True, 'selected': True,
                    'hidden': False, 'readonly': False, 'editable': True, 'blurred': None, 'blank': False,
-                   'shadow': True, 'frame': True, 'unload': None, 'untouched': False, 'unselected': False}
+                   'shadow': True, 'frame': True, 'unload': False, 'untouched': False, 'unselected': False,
+                   'scripted': None}
+
+
+TOUCH = '''<!doctype html><meta charset="utf-8"><body><input id=e value=a><textarea id=t>b</textarea>
+<select id=s><option>x</option><option>y</option></select>
+<input id=c type=checkbox style="position:absolute;left:300px;top:300px;width:30px;height:30px"><input id=other>'''
+
+
+@pytest.mark.skipif(BROWSER is None, reason='Edge / Chrome が見つからない')
+def test_dirty_tells_what_a_person_typed_from_what_the_page_set(tmp_path):
+    websocket = pytest.importorskip('websocket')
+    page, profile = tmp_path / 'touch.html', tmp_path / 'profile'
+    page.write_text(TOUCH, encoding='utf-8')
+    proc = subprocess.Popen([BROWSER, *SANDBOX, '--headless=new', '--disable-gpu', '--no-first-run',
+                             f'--user-data-dir={profile}', '--remote-debugging-port=0', page.as_uri()],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ws = None
+    try:
+        active = profile / 'DevToolsActivePort'
+        port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+        target = wait_for(lambda: next((p for p in vivaldi._pages(port) if p.get('url') == page.as_uri()), None))
+        ws = websocket.create_connection(target['webSocketDebuggerUrl'], timeout=10, suppress_origin=True)
+        n = iter(range(1, 1000))
+        send = lambda method, **params: vivaldi._call(ws, next(n), method, params)
+        js = lambda x: send('Runtime.evaluate', expression=x, returnByValue=True)['result'].get('value')
+        wait_for(lambda: js('document.readyState') == 'complete' or None)
+        reset = ("for (const e of document.querySelectorAll('input,textarea')) { e.value = e.defaultValue; e.checked = false; }"
+                 " document.getElementById('s').selectedIndex = 0;")
+        got = {}
+        js("document.getElementById('e').value = 'z'; document.getElementById('s').selectedIndex = 1;"
+           " document.getElementById('c').checked = true;")
+        got['page set'] = js(vivaldi.DIRTY)
+        js(reset)
+        for el in ('e', 't'):   # 打ってから欄を離れる
+            js(f"document.getElementById('{el}').focus()")
+            send('Input.insertText', text='typed')
+            js("document.getElementById('other').focus()")
+            got[f'typed {el}'] = js(vivaldi.DIRTY)
+            js(reset)
+        js("document.getElementById('s').focus()")
+        for kind in ('keyDown', 'keyUp'):
+            send('Input.dispatchKeyEvent', type=kind, key='ArrowDown', code='ArrowDown', windowsVirtualKeyCode=40)
+        js("document.getElementById('other').focus()")
+        got['chose'] = js(vivaldi.DIRTY)
+        js(reset)
+        for kind in ('mousePressed', 'mouseReleased'):
+            send('Input.dispatchMouseEvent', type=kind, x=315, y=315, button='left', clickCount=1)
+        js("document.getElementById('other').focus()")
+        got['clicked'] = js(vivaldi.DIRTY)
+        js(reset + " window.onbeforeunload = () => 'x';")
+        got['unload, used'] = js(vivaldi.DIRTY)   # 触ったページの離脱の確認は, 入力を見つけられなくても分からない扱い
+    finally:
+        if ws:
+            ws.close()
+        proc.kill()
+        proc.wait(timeout=30)
+    assert got == {'page set': None, 'typed e': True, 'typed t': True, 'chose': True, 'clicked': True,
+                   'unload, used': None}
 
 
 # 同じホストの別のポートは別のオリジンだが同じサイトなので, iframe は同じプロセスで動き, ページの中から読めない
 TOP = '<!doctype html><meta charset="utf-8"><body><iframe src="http://127.0.0.1:%d/%s"></iframe>'
-INNER = {'typed.html': '<input id=e value=a><script>document.getElementById("e").value = "z";</script>',
+INNER = {'typed.html': '<input id=e value=a><script>const e = document.getElementById("e"); e.value = "z"; e.focus();</script>',
          'clean.html': '<input id=e value=a>'}
 
 
