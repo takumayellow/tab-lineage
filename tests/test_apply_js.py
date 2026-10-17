@@ -153,6 +153,8 @@ const cases = {
   frame: '<iframe id="f" srcdoc="<input id=e value=a>"></iframe>',
   unload: '',
   scripted: '<input id="e" value="a"><select id="s"><option>x</option><option>y</option></select><input id="c" type="checkbox">',
+  settings: '<select id="s"><option>x</option><option>y</option></select><input id="c" type="checkbox"><input id="r" type="radio">',
+  slider: '<input id="g" type="range" value="10">',
 };
 const change = {
   typed: d => { d.getElementById('e').value = 'a!'; d.getElementById('e').focus(); },
@@ -167,6 +169,8 @@ const change = {
                  r.querySelector('input').value = 'z'; r.querySelector('input').focus(); },
   frame: d => { const e = d.getElementById('f').contentDocument.getElementById('e'); e.value = 'z'; e.focus(); },
   scripted: d => { d.getElementById('e').value = 'z'; d.getElementById('s').selectedIndex = 1; d.getElementById('c').checked = true; },
+  settings: d => { d.getElementById('s').selectedIndex = 1; d.getElementById('c').checked = true; d.getElementById('r').checked = true; },
+  slider: d => { d.getElementById('g').value = '80'; },
   unload: (d, w) => { w.onbeforeunload = () => 'x'; },
 };
 (async () => {
@@ -199,7 +203,7 @@ def test_dirty_finds_unsaved_input_and_ignores_untouched_forms(tmp_path):
     assert got == {'empty': False, 'typed': True, 'textarea': True, 'checked': True, 'selected': True,
                    'hidden': False, 'readonly': False, 'editable': True, 'blurred': None, 'blank': False,
                    'shadow': True, 'frame': True, 'unload': False, 'untouched': False, 'unselected': False,
-                   'scripted': None}
+                   'scripted': None, 'settings': False, 'slider': None}
 
 
 TOUCH = '''<!doctype html><meta charset="utf-8"><body><input id=e value=a><textarea id=t>b</textarea>
@@ -228,8 +232,9 @@ def test_dirty_tells_what_a_person_typed_from_what_the_page_set(tmp_path):
         reset = ("for (const e of document.querySelectorAll('input,textarea')) { e.value = e.defaultValue; e.checked = false; }"
                  " document.getElementById('s').selectedIndex = 0;")
         got = {}
-        js("document.getElementById('e').value = 'z'; document.getElementById('s').selectedIndex = 1;"
-           " document.getElementById('c').checked = true;")
+        js("document.getElementById('s').selectedIndex = 1; document.getElementById('c').checked = true;")
+        got['page set choice'] = js(vivaldi.DIRTY)   # ページが入れた設定は入力でない
+        js("document.getElementById('e').value = 'z';")
         got['page set'] = js(vivaldi.DIRTY)
         js(reset)
         for el in ('e', 't'):   # 打ってから欄を離れる
@@ -250,13 +255,22 @@ def test_dirty_tells_what_a_person_typed_from_what_the_page_set(tmp_path):
         got['clicked'] = js(vivaldi.DIRTY)
         js(reset + " window.onbeforeunload = () => 'x';")
         got['unload, used'] = js(vivaldi.DIRTY)   # 触ったページの離脱の確認は, 入力を見つけられなくても分からない扱い
+        js(reset + " window.onbeforeunload = null; document.body.insertAdjacentHTML('beforeend',"
+           " '<select id=s2><option>x</option><option>y</option></select>'); document.getElementById('s2').selectedIndex = 1;")
+        got['used, page set choice'] = js(vivaldi.DIRTY)   # 操作したページでは, 裏で値を合わせた欄か見分けられない
+        js('setTimeout(() => location.reload(), 0)')
+        wait_for(lambda: js("performance.getEntriesByType('navigation')[0].type === 'reload'"
+                            " && document.readyState === 'complete'") or None)
+        js("document.getElementById('s').selectedIndex = 1; document.getElementById('c').checked = true;")
+        got['reloaded choice'] = js(vivaldi.DIRTY)   # 開き直したページでは前に選んだ答えが印なしで戻る
     finally:
         if ws:
             ws.close()
         proc.kill()
         proc.wait(timeout=30)
-    assert got == {'page set': None, 'typed e': True, 'typed t': True, 'chose': True, 'clicked': True,
-                   'unload, used': None}
+    assert got == {'page set choice': False, 'page set': None, 'typed e': True, 'typed t': True, 'chose': True, 'clicked': True,
+                   'unload, used': None,
+                   'used, page set choice': None, 'reloaded choice': None}
 
 
 # 同じホストの別のポートは別のオリジンだが同じサイトなので, iframe は同じプロセスで動き, ページの中から読めない

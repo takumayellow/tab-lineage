@@ -295,12 +295,19 @@ TABS = '''(async () => (await chrome.tabs.query({windowType: 'normal'})).map(t =
 # 選んでいない編集できる要素に文字があるときは, サイトの中身か書きかけか見分けられないので null. 調べて落ちたら true.
 # 値が初めと違っても, 人が触った印 (:user-valid / :user-invalid) が無く選んでもいない欄は, ページのスクリプトが入れた値
 # (検索結果の検索欄など) か, 再起動で戻った値なので null. 印は人が打って欄を離れたとき, 選ぶ欄は選んだときに付く
+# 選ぶ欄 (select・checkbox・radio) も, 開いてから一度も操作されていないページで印が無ければ, ページが入れた設定 (言語・表示の切り替えなど) なので false.
+# 操作されたページでは, 見た目だけの部品の裏で値を合わせる欄や作り直された欄に印が付かないので null のまま. range は人が動かしても印が付かない.
+# 戻る・再読み込み・再起動で開き直したページも, 前に選んだ答え (小テストの radio など) が印なしで戻るので null のまま
 DIRTY = r'''(() => {
   const skip = new Set(['hidden', 'submit', 'button', 'reset', 'image']);
   const marks = (() => { try { return CSS.supports('selector(:user-valid)'); } catch (e) { return false; } })();
   const touched = e => !marks || e.matches(':user-valid, :user-invalid') || e.getRootNode().activeElement === e;
+  const nav = (performance.getEntriesByType('navigation')[0] || {}).type;
+  // 一度もクリックもキー入力もされていないページでは, 人の入力は無い (ブラウザも離脱の確認を出さない)
+  const used = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+  const fresh = !used && (nav === 'navigate' || nav === 'prerender');
   let maybe = false;
-  const changed = e => { if (touched(e)) return true; maybe = true; return false; };
+  const changed = (e, choice) => { if (touched(e)) return true; if (!(choice && fresh)) maybe = true; return false; };
   const dirty = doc => {
     for (const e of doc.querySelectorAll('[contenteditable]')) {
       if (!e.isContentEditable || (e.parentElement && e.parentElement.isContentEditable)) continue;
@@ -322,12 +329,12 @@ DIRTY = r'''(() => {
           const k = start.lastIndexOf(true) >= 0 ? start.lastIndexOf(true) : opts.findIndex(usable);
           start = opts.map((o, i) => i === k);
         }
-        if (opts.some((o, i) => o.selected !== start[i]) && changed(e)) return true;
+        if (opts.some((o, i) => o.selected !== start[i]) && changed(e, true)) return true;
         continue;
       }
       const type = (e.type || '').toLowerCase();
       if (skip.has(type)) continue;
-      if (type === 'checkbox' || type === 'radio') { if (e.checked !== e.defaultChecked && changed(e)) return true; continue; }
+      if (type === 'checkbox' || type === 'radio') { if (e.checked !== e.defaultChecked && changed(e, true)) return true; continue; }
       if (type === 'file') { if (e.files && e.files.length) return true; continue; }
       if (e.value !== e.defaultValue && changed(e)) return true;
     }
@@ -339,8 +346,7 @@ DIRTY = r'''(() => {
     return false;
   };
   // onbeforeunload は入力が無くても置くサイトが多い (Amazon は全部のページ). 置いてあるだけでは決めず, 調べられなかった扱いにする.
-  // ただし開いてから一度もクリックもキー入力もされていないページでは, 人の入力は無い (ブラウザも離脱の確認を出さない)
-  const used = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+  // ただし一度も操作されていないページは除く
   try {
     return dirty(document) || (maybe || (used && typeof window.onbeforeunload === 'function') ? null : false);
   } catch (e) { return true; }
