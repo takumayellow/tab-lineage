@@ -6,7 +6,9 @@
 import contextlib
 import functools
 import http.server
+import itertools
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -330,3 +332,61 @@ def test_form_state_finds_input_in_a_frame_the_page_cannot_read(tmp_path):
         finally:
             proc.kill()
             proc.wait(timeout=30)
+
+
+def tiny_pdf() -> bytes:
+    objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>']
+    out, offsets = b'%PDF-1.4\n', []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f'{i} 0 obj\n{o}\nendobj\n'.encode()
+    xref = len(out)
+    out += f'xref\n0 {len(objs) + 1}\n0000000000 65535 f \n'.encode()
+    out += b''.join(f'{o:010d} 00000 n \n'.encode() for o in offsets)
+    return out + f'trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()
+
+
+@pytest.mark.skipif(BROWSER is None, reason='Edge / Chrome が見つからない')
+def test_dirty_reads_the_pdf_viewer_state_instead_of_its_toolbar(tmp_path):
+    websocket = pytest.importorskip('websocket')
+    pdf, profile = tmp_path / 'a.pdf', tmp_path / 'profile'
+    pdf.write_bytes(tiny_pdf())
+    proc = subprocess.Popen([BROWSER, *SANDBOX, '--headless=new', '--disable-gpu', '--no-first-run',
+                             f'--user-data-dir={profile}', '--remote-debugging-port=0', 'about:blank'],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        active = profile / 'DevToolsActivePort'
+        port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+        urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/json/new?{pdf.as_uri()}',
+                                                      method='PUT'), timeout=10).close()
+        origin = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai'   # vivaldi.DIRTY の PDF ビューアと同じ
+        try:
+            viewer = wait_for(lambda: next((t for t in vivaldi._pages(port) if t.get('url', '').startswith(origin)),
+                                           None), tries=20)
+        except AssertionError:
+            pytest.skip('このブラウザの PDF ビューアは別の作り')
+        ws = websocket.create_connection(viewer['webSocketDebuggerUrl'], timeout=10, suppress_origin=True)
+        try:
+            ids = itertools.count(1)
+
+            def js(expr):
+                return vivaldi._call(ws, next(ids), 'Runtime.evaluate',
+                                     {'expression': expr, 'returnByValue': True})['result'].get('value')
+            if 'edge' in os.path.basename(BROWSER).lower():   # Edge のビューアは書き込みの状態を別に持つので, 調べられない
+                assert js(vivaldi.DIRTY) is None
+                return
+            # Chrome / Vivaldi では状態が読めること (名前が変わったら, ここで落ちる)
+            wait_for(lambda: True if js("typeof document.querySelector('pdf-viewer')?.showBeforeUnloadDialog_")
+                     == 'boolean' else None)
+            assert js(vivaldi.DIRTY) is False   # ページ番号・倍率の欄があっても書き込みは無い
+            assert vivaldi._probe(viewer['webSocketDebuggerUrl']) is False   # 子のフレームを含めて調べても同じ
+            js("document.querySelector('pdf-viewer').formFieldFocus_ = 'text'")
+            assert js(vivaldi.DIRTY) is None   # PDF の欄を選んでいる
+            js("document.querySelector('pdf-viewer').showBeforeUnloadDialog_ = true")
+            assert js(vivaldi.DIRTY) is True
+        finally:
+            ws.close()
+    finally:
+        proc.kill()
+        proc.wait(timeout=30)

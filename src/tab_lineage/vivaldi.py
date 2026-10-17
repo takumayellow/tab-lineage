@@ -298,7 +298,14 @@ TABS = '''(async () => (await chrome.tabs.query({windowType: 'normal'})).map(t =
 # 選ぶ欄 (select・checkbox・radio) も, 開いてから一度も操作されていないページで印が無ければ, ページが入れた設定 (言語・表示の切り替えなど) なので false.
 # 操作されたページでは, 見た目だけの部品の裏で値を合わせる欄や作り直された欄に印が付かないので null のまま. range は人が動かしても印が付かない.
 # 戻る・再読み込み・再起動で開き直したページも, 前に選んだ答え (小テストの radio など) が印なしで戻るので null のまま
+# PDF ビューアは, 表示の部品 (ページ番号・倍率の欄) を見ずに, ブラウザが閉じる前の確認に使う「書き込みが保存されていない」を返す.
+# PDF の欄を選んでいる間は書きかけかもしれないので null. どちらもビューアの内部の値で, 名前が変わると null になる (閉じない側)
 DIRTY = r'''(() => {
+  if (location.origin === 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai') {
+    const v = document.querySelector('pdf-viewer');
+    if (!v || typeof v.showBeforeUnloadDialog_ !== 'boolean') return null;
+    return v.showBeforeUnloadDialog_ || (v.formFieldFocus_ && v.formFieldFocus_ !== 'none' ? null : false);
+  }
   const skip = new Set(['hidden', 'submit', 'button', 'reset', 'image']);
   const marks = (() => { try { return CSS.supports('selector(:user-valid)'); } catch (e) { return false; } })();
   const touched = e => !marks || e.matches(':user-valid, :user-invalid') || e.getRootNode().activeElement === e;
