@@ -8,6 +8,7 @@ import functools
 import http.server
 import itertools
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -372,7 +373,7 @@ def test_dirty_reads_the_pdf_viewer_state_instead_of_its_toolbar(tmp_path):
             def js(expr):
                 return vivaldi._call(ws, next(ids), 'Runtime.evaluate',
                                      {'expression': expr, 'returnByValue': True})['result'].get('value')
-            if 'msedge' in BROWSER.lower():   # Edge のビューアは書き込みの状態を別に持つので, 調べられない
+            if 'edge' in os.path.basename(BROWSER).lower():   # Edge のビューアは書き込みの状態を別に持つので, 調べられない
                 assert js(vivaldi.DIRTY) is None
                 return
             # Chrome / Vivaldi では状態が読めること (名前が変わったら, ここで落ちる)
