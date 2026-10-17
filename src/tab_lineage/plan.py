@@ -178,8 +178,8 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
         first = first_of.setdefault(key, len(out))
         nid = node_of.get(url, folded.get(url, -1))
         goal = (None if masked else (anchored or {}).get(page_key(tab.url))) or goals.get(nid) or host
-        # URL の規則に当たらないタブは, 開いた流れ (スレッド, 無ければ回) のワークスペースに入れる
-        workspace = ecfg.workspace_of(tab.url) or spaces.get(nid)
+        # URL と題名の規則に当たらないタブは, 開いた流れ (スレッド, 無ければ回) のワークスペースに入れる
+        workspace = ecfg.workspace_of(tab.url, title) or spaces.get(nid)
         out.append(Placed(tab, title, status, workspace, goal, first))
     return out
 

@@ -54,7 +54,8 @@ class ArrangeConfig:
         anchors = tuple(Anchor(tuple(x.get('match', ())), re.compile(x['name']) if x.get('name') else None)
                         for x in a.get('anchor', ()))
         return cls(
-            order=tuple(w['name'] for w in cfg.get('workspace', ())),
+            # 規則の順を変えるために同じ名前を 2 回書いてもよい. 並べる順は最初に出た所
+            order=tuple(dict.fromkeys(w['name'] for w in cfg.get('workspace', ()))),
             emoji=tuple(a.get('emoji', {}).items()),
             reading_root=a.get('reading_root', 'あとで読む'),
             reading_workspaces=tuple(a.get('reading_workspaces', ())),

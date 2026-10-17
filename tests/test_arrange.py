@@ -329,3 +329,9 @@ def test_anchor_labels_follow_the_raw_visits_keep_names_over_restored_tabs_and_s
               Visit(7, 6, 'https://x.example/f.pdf', 'f.pdf', 1, False, 0, 0, 0)]
     assert plan.anchor_labels(visits, anchors, privacy) == {
         'https://x.example/c/1?id=1': 'Algebra', 'https://x.example/f.pdf': 'Algebra', 'https://x.example/h': 'Algebra'}
+
+
+def test_a_workspace_written_twice_is_ordered_where_it_first_appears():
+    a = arrange.ArrangeConfig.from_config({'workspace': [{'name': '大学'}, {'name': '開発', 'match': ['x.example/*']},
+                                                         {'name': '学習'}, {'name': '開発', 'match': ['*']}]})
+    assert a.order == ('大学', '開発', '学習')
