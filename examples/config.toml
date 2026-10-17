@@ -12,8 +12,9 @@ stale_hours = 12
 [threads]
 theta = 0.12
 
-# ワークスペース. 'host/path' の glob に一致した訪問を振り分け, 回とスレッドには多数決で付ける.
-# 上から順に照合する.
+# ワークスペース. 'host/path' の glob か題名の正規表現 (title, 大文字小文字を区別しない) に当たった訪問を振り分け,
+# 回とスレッドには多数決で付ける. 上から順に照合する. 順を変えるために同じ名前を 2 回書いてもよい.
+# 伏せるページ ([privacy.mask]) の題名は伏せたあとの名前なので, 題名の規則には当たらない.
 [[workspace]]
 name = "仕事"
 match = ["github.com/my-org/*", "*.atlassian.net/*", "docs.google.com/*"]
@@ -21,6 +22,7 @@ match = ["github.com/my-org/*", "*.atlassian.net/*", "docs.google.com/*"]
 [[workspace]]
 name = "大学"
 match = ["*.ac.jp/*", "scholar.google.*/*"]
+title = '講義|演習|レポート'
 
 [[workspace]]
 name = "個人開発"

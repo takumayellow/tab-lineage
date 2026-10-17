@@ -5,7 +5,7 @@
 - スレッド:   同じ回の木を, 題名の近さ (TF-IDF の余弦) か入口のサイトが同じかでまとめる (規則 6).
 - 寄り道:     木の中で, 部分木の話題がそれ以外とほとんど重ならない枝に印を付ける (規則 7).
 - 放置:       stale_hours 以上開いていたページに印を付ける (規則 8).
-- ワークスペース: 設定の glob で訪問を分類し, 多数決で回とスレッドに付ける (規則 9).
+- ワークスペース: 設定の glob (と題名の正規表現) で訪問を分類し, 多数決で回とスレッドに付ける (規則 9).
              それでも決まらないスレッドは, 近い日の別の回で題名の近いスレッドから引き継ぐ.
 """
 from __future__ import annotations
@@ -15,9 +15,12 @@ import datetime as dt
 import fnmatch
 import math
 import re
+import unicodedata
 import zoneinfo
 from collections import Counter
 from dataclasses import dataclass, replace
+from typing import NamedTuple
+from urllib.parse import unquote
 
 from .histdb import US, unix_s
 from .lineage import Graph, Node
@@ -26,6 +29,12 @@ from .text import Vector, Vectorizer, clean_title, cosine, tokens
 
 LABEL_MAX = 30
 OTHER = 'そのほか'
+
+
+class WorkspaceRule(NamedTuple):
+    name: str
+    match: tuple[str, ...]           # 'host/path' の glob
+    title: re.Pattern | None = None  # 題名の正規表現
 
 
 @dataclass(frozen=True)
@@ -41,7 +50,7 @@ class EpisodeConfig:
     ws_share: float = 0.5          # 最多のワークスペースが, 規則に当たった訪問のこの割合に届かなければ未分類
     ws_cover: float = 0.1          # 規則に当たった訪問が全体のこの割合に届かなければ未分類
     ws_infer_days: float = 7.0     # 決まらないスレッドが, 題名の近いスレッドからワークスペースを引き継ぐ範囲 (日). 0 で引き継がない
-    workspaces: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    workspaces: tuple[WorkspaceRule, ...] = ()
 
     @classmethod
     def from_config(cls, cfg: dict) -> 'EpisodeConfig':
@@ -55,12 +64,25 @@ class EpisodeConfig:
             ws_share=float(cfg.get('episodes', {}).get('ws_share', 0.5)),
             ws_cover=float(cfg.get('episodes', {}).get('ws_cover', 0.1)),
             ws_infer_days=float(cfg.get('episodes', {}).get('ws_infer_days', 7)),
-            workspaces=tuple((w['name'], tuple(w.get('match', ()))) for w in cfg.get('workspace', ())),
+            workspaces=tuple(WorkspaceRule(w['name'], tuple(w.get('match', ())),
+                                           re.compile(w['title'], re.I) if w.get('title') else None)
+                             for w in cfg.get('workspace', ())),
         )
 
-    def workspace_of(self, url: str) -> str | None:
-        key = site_key(url)
-        return next((name for name, pats in self.workspaces if any(fnmatch.fnmatchcase(key, p) for p in pats)), None)
+    def workspace_of(self, url: str, title: str = '') -> str | None:
+        """上から順に, URL の glob か題名の正規表現に当たった最初のワークスペース.
+
+        手元のファイルは題名が伏せられるので, 復号したファイル名 (濁点を合成した形) にも glob と正規表現を当てる.
+        """
+        keys, texts = [site_key(url)], [title]
+        if keys[0].startswith('file:/'):
+            keys.append(unicodedata.normalize('NFC', unquote(keys[0])))
+            texts.append(keys[-1][len('file:/'):])
+        for rule in self.workspaces:
+            if (any(fnmatch.fnmatchcase(k, p) for k in keys for p in rule.match)
+                    or (rule.title and any(rule.title.search(t) for t in texts if t))):
+                return rule.name
+        return None
 
 
 @dataclass(frozen=True)
@@ -318,7 +340,9 @@ def build(g: Graph, cfg: EpisodeConfig, tz: dt.tzinfo | None = None) -> Timeline
 
     ep_of = {i: bisect.bisect_right(starts, n.t0) - 1 for i, n in g.nodes.items()}
     weights = {i: len(n.times) for i, n in g.nodes.items()}
-    ws = {i: w for i, n in g.nodes.items() if (w := cfg.workspace_of(n.src or n.url))}
+    # 伏せた節の題名は伏せたあとの名前 (「Claude」など) なので, 題名の規則には当たらない.
+    # 検索語は調べたい言葉で, その回の分野とは限らないので, 検索の題名も当てない
+    ws = {i: w for i, n in g.nodes.items() if (w := cfg.workspace_of(n.src or n.url, '' if n.kind == 'search' else n.title))}
     stale = {i: round(n.dur / US / 86400, 1) for i, n in g.nodes.items() if n.dur >= cfg.stale_hours * 3600 * US}
 
     by_ep: dict[int, list[int]] = {}

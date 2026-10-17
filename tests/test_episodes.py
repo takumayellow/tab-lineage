@@ -1,4 +1,6 @@
 import datetime as dt
+import re
+import unicodedata
 
 from _util import visit
 from tab_lineage import config, episodes, lineage
@@ -75,6 +77,42 @@ def test_workspace_needs_rules_to_cover_some_of_the_visits():
 def test_workspace_needs_half_of_the_matched_visits():
     assert _one_episode(0, ['Work', 'Home', 'Home', 'School']) == 'Home'
     assert _one_episode(0, ['Work', 'Home', 'School']) is None
+
+
+def test_workspace_rules_also_match_titles_in_order():
+    ws = {'workspace': [{'name': '大学', 'match': ['lms.example/*'], 'title': '実験|確率統計'},
+                        {'name': '開発', 'match': ['github.com/*']}]}
+    _, tl = timeline([visit(1, 0, 'https://github.com/me/notes', '確率統計2 の演習 · me/notes', core=1),
+                      visit(2, 5, 'https://github.com/me/app', 'app', core=1),
+                      visit(3, 9, 'https://stat.example/', '情報工学実験2 のコードを読む', core=1)], ws)
+    assert tl.workspace == {1: '大学', 2: '開発', 3: '大学'}
+    assert tl.episodes[0].workspace == '大学'
+
+
+def test_local_files_are_matched_by_their_decoded_file_name():
+    from urllib.parse import quote
+    cfg = episodes.EpisodeConfig(workspaces=(episodes.WorkspaceRule('大学', ('file:/4625090_*',), re.compile('情報工学実験|オブジェクト指向')),))
+    nfd = quote(unicodedata.normalize('NFD', 'オブジェクト指向開発_04.pdf'))
+    assert cfg.workspace_of('file:///C:/a/' + quote('情報工学実験2_第04回.pdf'), 'ローカルのファイル') == '大学'
+    assert cfg.workspace_of('file:///C:/a/' + nfd) == '大学'
+    assert cfg.workspace_of('file:///C:/a/4625090_x.pdf') == '大学'
+    assert cfg.workspace_of('file:///C:/' + quote('情報工学実験') + '/memo.pdf') is None   # フォルダは見ない
+
+
+def test_title_rules_do_not_see_the_titles_of_masked_pages():
+    cfg = config._merge(config.default(), {'workspace': [{'name': '大学', 'title': '実験'}],
+                                           'privacy': {'mask': {'chat.example/*': 'Chat'}}})
+    g = lineage.build([visit(1, 0, 'https://chat.example/c/1', '実験のレポートの相談', core=1)],
+                      lineage.LineageConfig.from_config(cfg), Privacy.from_config(cfg['privacy']))
+    assert episodes.build(g, episodes.EpisodeConfig.from_config(cfg), UTC).workspace == {}
+
+
+def test_title_rules_do_not_see_search_terms():
+    cfg = config._merge(config.default(), {'workspace': [{'name': '大学', 'title': '実験'}]})
+    g = lineage.build([visit(1, 0, 'https://www.google.com/search?q=%E5%AE%9F%E9%A8%93', '実験 - Google 検索', core=1)],
+                      lineage.LineageConfig.from_config(cfg), Privacy.from_config(cfg['privacy']))
+    assert [n.kind for n in g.nodes.values()] == ['search']
+    assert episodes.build(g, episodes.EpisodeConfig.from_config(cfg), UTC).workspace == {}
 
 
 DAY = 86400
