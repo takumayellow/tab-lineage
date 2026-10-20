@@ -64,6 +64,18 @@ pip install git+https://github.com/takumayellow/tab-lineage
    match = ["lms.univ.example/course/view.php"]   # 'host/path' の glob
    name = '^コース: (.+?) \('                      # 「コース: 線形代数 (A1)」→「線形代数」
    ```
+   流れと関係なく，題名か URL の言葉でまとめたいとき（科目名，コンテストの回など）は `[[arrange.topic]]` に書く．`pattern` の正規表現が題名か，復号した URL に当たったタブは，流れの名前より先にこの名前のスタックに入る．`name` は `{0}` で正規表現のグループを差し込め，無ければ最初のグループ（無ければ当たった所全体）．題名が `close_title` に当たるタブ（エラーのページなど）は開き直さず閉じる案に入れる．どのワークスペースにも当たらないタブは `unsorted` のワークスペースへ移すが，`unsorted = ""` なら動かさない．ワークスペースの並びは `order` で変えられる．
+
+   ```toml
+   [arrange]
+   order = ["大学", "競プロ"]
+   unsorted = ""
+   close_title = '^(404|エラー)( |$|\|)'
+
+   [[arrange.topic]]
+   pattern = 'atcoder\.jp/contests/abc(\d+)'
+   name = "ABC{0}"                                 # 「ABC479」
+   ```
    出力には URL と題名がそのまま入るので，リポジトリやサイトに載せない．
 
    起動中の Vivaldi に適用する．

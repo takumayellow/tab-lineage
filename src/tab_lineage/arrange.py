@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import unicodedata
 from dataclasses import dataclass
+from urllib.parse import unquote
 
+from .episodes import LABEL_MAX
 from .plan import Anchor, Placed
 from .privacy import site_key
 
-WHY = {'serp': '検索結果', 'dup': '重複', 'drop': 'ログイン・決済など', 'local': 'ブラウザの画面'}
+WHY = {'serp': '検索結果', 'dup': '重複', 'drop': 'ログイン・決済など', 'local': 'ブラウザの画面', 'error': 'エラーのページ'}
 # apply で開くのは web のページと手元のファイルだけ. javascript: や data: のタブ・ブックマークを作らない
 SCHEMES = ('http://', 'https://', 'file:///')
 
@@ -34,6 +37,26 @@ class Folder:
 
 
 @dataclass(frozen=True)
+class Topic:
+    """題名か URL (復号して濁点を合成した形) に当たったタブを, この名前のスタックにまとめる. 開いた流れの名前より先に当てる.
+    name は str.format で正規表現のグループを差し込める ('ABC{0}'). 無ければ最初のグループ (無ければ当たった所全体)."""
+    pattern: re.Pattern
+    name: str | None = None
+
+    def label(self, url: str, title: str) -> str | None:
+        texts = (title, unicodedata.normalize('NFC', unquote(url)))
+        m = next((m for t in texts if t and (m := self.pattern.search(t))), None)
+        if not m:
+            return None
+        groups = tuple(g or '' for g in m.groups())
+        try:
+            got = self.name.format(*groups) if self.name else (groups[0] if groups else m.group(0))
+        except (IndexError, KeyError):   # name がグループより多く差し込む. 設定の誤りなので名前を付けない
+            return None
+        return unicodedata.normalize('NFKC', got).strip()[:LABEL_MAX] or None
+
+
+@dataclass(frozen=True)
 class ArrangeConfig:
     order: tuple[str, ...] = ()                 # ワークスペースを並べる順 (設定の [[workspace]] の順)
     emoji: tuple[tuple[str, str], ...] = ()
@@ -41,7 +64,9 @@ class ArrangeConfig:
     reading_workspaces: tuple[str, ...] = ()    # このワークスペースのタブはブックマークへ回す
     folders: tuple[Folder, ...] = ()
     anchors: tuple[Anchor, ...] = ()        # このページから開いたタブを, ページの名前のスタックにまとめる
-    unsorted: str = '未分類'
+    topics: tuple[Topic, ...] = ()
+    close_title: re.Pattern | None = None   # 題名がこれに当たるタブ (エラーのページなど) は開き直さない
+    unsorted: str = '未分類'                 # 空ならどこにも当たらないタブを動かさない
     min_stack: int = 2
 
     @classmethod
@@ -54,19 +79,24 @@ class ArrangeConfig:
         anchors = tuple(Anchor(tuple(x.get('match', ())), re.compile(x['name']) if x.get('name') else None)
                         for x in a.get('anchor', ()))
         return cls(
-            # 規則の順を変えるために同じ名前を 2 回書いてもよい. 並べる順は最初に出た所
-            order=tuple(dict.fromkeys(w['name'] for w in cfg.get('workspace', ()))),
+            # 規則の順を変えるために同じ名前を 2 回書いてもよい. 並べる順は arrange.order, 次に最初に出た所
+            order=tuple(dict.fromkeys([*a.get('order', ()), *(w['name'] for w in cfg.get('workspace', ()))])),
             emoji=tuple(a.get('emoji', {}).items()),
             reading_root=a.get('reading_root', 'あとで読む'),
             reading_workspaces=tuple(a.get('reading_workspaces', ())),
             folders=folders,
             anchors=anchors,
+            topics=tuple(Topic(re.compile(t['pattern'], re.I), t.get('name')) for t in a.get('topic', ())),
+            close_title=re.compile(a['close_title'], re.I) if a.get('close_title') else None,
             unsorted=a.get('unsorted', '未分類'),
             min_stack=max(2, int(a.get('min_stack', 2))),
         )
 
     def folder_of(self, url: str, title: str) -> tuple[str, ...]:
         return next((f.path for f in self.folders if f.hits(url, title)), ())
+
+    def topic_of(self, url: str, title: str) -> str | None:
+        return next((x for t in self.topics if (x := t.label(url, title))), None)
 
 
 def _insert(tree: dict, path: tuple[str, ...], link: list[str]) -> None:
@@ -90,13 +120,16 @@ def build(placed: list[Placed], cfg: ArrangeConfig) -> dict:
     for p in placed:
         link = [p.tab.title or p.tab.url, p.tab.url]
         status = p.status if _is_web(p.tab.url) else 'local'
+        if status in ('keep', 'stash') and cfg.close_title and cfg.close_title.search(p.tab.title or ''):
+            status = 'error'
         if status in WHY:
             close.append({'title': link[0], 'url': link[1], 'why': WHY[status]})
         elif status == 'stash' or p.workspace in cfg.reading_workspaces:
             _insert(bookmarks, cfg.folder_of(p.tab.url, link[0]), link)
-        else:
+        elif p.workspace or cfg.unsorted:   # unsorted が空なら, どこにも当たらないタブは案に入れず元の場所に残す
             ws = p.workspace or cfg.unsorted
-            groups.setdefault(ws, {}).setdefault(p.goal, []).append(link)
+            goal = cfg.topic_of(p.tab.url, p.tab.title or '') or p.goal
+            groups.setdefault(ws, {}).setdefault(goal, []).append(link)
 
     rank = {w: k for k, w in enumerate(cfg.order)}
     emoji = dict(cfg.emoji)
