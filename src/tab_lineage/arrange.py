@@ -16,10 +16,10 @@ from dataclasses import dataclass
 from urllib.parse import unquote
 
 from .episodes import LABEL_MAX
-from .plan import Anchor, Placed
+from .plan import Anchor, Placed, page_key
 from .privacy import site_key
 
-WHY = {'serp': '検索結果', 'dup': '重複', 'drop': 'ログイン・決済など', 'local': 'ブラウザの画面', 'error': 'エラーのページ'}
+WHY = {'serp': '検索結果', 'dup': '重複', 'drop': 'ログイン・決済など', 'local': 'ブラウザの画面', 'error': 'エラーのページ', 'done': '用済み (AI の判定)'}
 # apply で開くのは web のページと手元のファイルだけ. javascript: や data: のタブ・ブックマークを作らない
 SCHEMES = ('http://', 'https://', 'file:///')
 
@@ -113,7 +113,8 @@ def _append(xs: list, x):
     return x
 
 
-def build(placed: list[Placed], cfg: ArrangeConfig) -> dict:
+def build(placed: list[Placed], cfg: ArrangeConfig, verdicts: dict[str, dict] | None = None) -> dict:
+    """verdicts は judge.run の結果 (URL -> AI の判定). 当たったタブは, 規則より先にその置き場所とスタックの名前を使う."""
     groups: dict[str, dict[str, list[list[str]]]] = {}
     bookmarks = {'title': cfg.reading_root, 'children': [], 'links': []}
     close: list[dict] = []
@@ -122,13 +123,20 @@ def build(placed: list[Placed], cfg: ArrangeConfig) -> dict:
         status = p.status if _is_web(p.tab.url) else 'local'
         if status in ('keep', 'stash') and cfg.close_title and cfg.close_title.search(p.tab.title or ''):
             status = 'error'
+        v = (verdicts or {}).get(page_key(p.tab.url)) if status == 'keep' else None
+        if v and v['action'] == 'done':
+            status = 'done'
+        workspace = v['workspace'] if v else p.workspace
         if status in WHY:
             close.append({'title': link[0], 'url': link[1], 'why': WHY[status]})
-        elif status == 'stash' or p.workspace in cfg.reading_workspaces:
+        elif status == 'stash' or workspace in cfg.reading_workspaces or (v and v['action'] == 'later'):
             _insert(bookmarks, cfg.folder_of(p.tab.url, link[0]), link)
-        elif p.workspace or cfg.unsorted:   # unsorted が空なら, どこにも当たらないタブは案に入れず元の場所に残す
-            ws = p.workspace or cfg.unsorted
-            goal = cfg.topic_of(p.tab.url, p.tab.title or '') or p.goal
+        elif workspace or cfg.unsorted:   # unsorted が空なら, どこにも当たらないタブは案に入れず元の場所に残す
+            ws = workspace or cfg.unsorted
+            if v:   # AI がまとめる相手が無いとしたタブ (stack が null) は, 開いた流れが同じでも 1 枚で置く
+                goal = v.get('stack') or f'\x00{link[1]}'
+            else:
+                goal = cfg.topic_of(p.tab.url, p.tab.title or '') or p.goal
             groups.setdefault(ws, {}).setdefault(goal, []).append(link)
 
     rank = {w: k for k, w in enumerate(cfg.order)}
