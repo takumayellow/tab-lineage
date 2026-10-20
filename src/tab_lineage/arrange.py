@@ -130,7 +130,8 @@ def build(placed: list[Placed], cfg: ArrangeConfig, verdicts: dict[str, dict] | 
         if status in WHY:
             close.append({'title': link[0], 'url': link[1], 'why': WHY[status]})
         elif status == 'stash' or workspace in cfg.reading_workspaces or (v and v['action'] == 'later'):
-            _insert(bookmarks, cfg.folder_of(p.tab.url, link[0]), link)
+            folder = v.get('folder') if v and v['action'] == 'later' else None
+            _insert(bookmarks, tuple(folder) if folder else cfg.folder_of(p.tab.url, link[0]), link)
         elif workspace or cfg.unsorted:   # unsorted が空なら, どこにも当たらないタブは案に入れず元の場所に残す
             ws = workspace or cfg.unsorted
             if v:   # AI がまとめる相手が無いとしたタブ (stack が null) は, 開いた流れが同じでも 1 枚で置く
@@ -146,12 +147,14 @@ def build(placed: list[Placed], cfg: ArrangeConfig, verdicts: dict[str, dict] | 
         stacks = [{'stack': goal, 'tabs': tabs} for goal, tabs in groups[ws].items() if len(tabs) >= cfg.min_stack]
         singles = [{'stack': None, 'tabs': tabs} for tabs in groups[ws].values() if len(tabs) < cfg.min_stack]
         workspaces.append({'name': ws, 'emoji': emoji.get(ws, ''), 'items': stacks + singles})
-    return {'workspaces': workspaces, 'bookmarks': bookmarks, 'close': close}
+    return {'workspaces': workspaces, 'order': list(cfg.order), 'bookmarks': bookmarks, 'close': close}
 
 
 def refile_moves(links: list[dict], cfg: ArrangeConfig) -> list[dict]:
-    """あとで読むの直下にあるリンク ({id, title, url}) のうち, フォルダの規則に当たるものと移す先 (path)."""
-    return [{**link, 'path': list(path)} for link in links if (path := cfg.folder_of(link['url'], link['title']))]
+    """あとで読むの直下にあるリンク ({id, title, url, path}) のうち, フォルダの規則に当たるものと移す先 (path).
+    フォルダの中のリンク (path が空でない) は規則では動かさない."""
+    return [{**link, 'from': [], 'path': list(path)} for link in links
+            if not link.get('path') and (path := cfg.folder_of(link['url'], link['title']))]
 
 
 def _is_web(url: str) -> bool:
@@ -191,6 +194,9 @@ def validate(arr: dict) -> dict:
                 raise ValueError(f'{where}: tabs は [題名, http(s) か file の URL] の並び')
             if item.get('stack') is not None and not isinstance(item['stack'], str):
                 raise ValueError(f'{where}: stack は文字列か null')
+    order = arr.get('order', [])
+    if not isinstance(order, list) or not all(isinstance(n, str) for n in order):
+        raise ValueError('order はワークスペースの名前の並び')
     if arr.get('bookmarks') is not None:
         _check_folder(arr['bookmarks'], 'bookmarks')
     close = arr.get('close', [])

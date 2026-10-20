@@ -193,11 +193,14 @@ def test_run_refiles_the_reading_folder(tmp_path, profile, live, monkeypatch):
     state = tmp_path / 'state'
     state.mkdir()
     moves = [{'id': '7', 'folder': 'AI'}]
-    monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: [{'id': '7', 'title': 'c', 'url': 'https://c.example/'}])
+    (profile / 'Bookmarks').write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: [{'id': '7', 'title': 'c', 'url': 'https://c.example/',
+                                                                       'path': []}])
     monkeypatch.setattr(auto.arrange, 'refile_moves', lambda links, acfg: moves)
     monkeypatch.setattr(vivaldi, 'move', lambda port, root, ms: live.append(('move', ms)) or {'moved': len(ms)})
     lines = auto.run(state, 9242, profile, refile=True)
     assert ('move', moves) in live and 'あとで読むを振り分けた 1 件' in lines
+    assert list((state / 'bookmarks').glob('Bookmarks-*.json'))
 
 
 def test_cli_apply_still_warns_when_it_could_not_switch(tmp_path, monkeypatch, capsys):
@@ -414,3 +417,15 @@ def test_run_remembers_the_tabs_before_apply_when_it_cannot_read_them_after(tmp_
     lines = auto.run(state, 9242, profile)
     assert any('適用の後のタブを読めなかった' in line for line in lines)
     assert auto.load_state(state)['urls'] == auto.url_marks(TABS)
+
+
+def test_run_skips_refiling_without_a_backup_but_still_records_the_run(tmp_path, profile, live, monkeypatch):
+    state = tmp_path / 'state'
+    state.mkdir()
+    monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: [{'id': '7', 'title': 'c', 'url': 'https://c.example/',
+                                                                       'path': []}])
+    monkeypatch.setattr(auto.arrange, 'refile_moves', lambda links, acfg: [{'id': '7', 'from': [], 'path': ['AI']}])
+    monkeypatch.setattr(vivaldi, 'move', lambda *a: pytest.fail('控えの無いまま移した'))
+    lines = auto.run(state, 9242, profile, refile=True)
+    assert any(x.startswith('あとで読むを振り分けなかった') for x in lines)
+    assert auto.load_state(state).get('fingerprint')

@@ -35,7 +35,7 @@ def asked(monkeypatch):
     """ask の代わり. 呼ばれた items を記録し, answer で返す判定を決める."""
     calls = []
 
-    def fake(items, known, workspaces, jcfg, cwd):
+    def fake(items, known, workspaces, jcfg, cwd, folders=frozenset()):
         calls.append({'items': items, 'known': list(known), 'workspaces': workspaces})
         return [fake.answer(x) for x in items]
     fake.answer = lambda x: {'id': x['id'], 'workspace': '大学', 'stack': '応数B DFT', 'action': 'keep'}
@@ -211,3 +211,90 @@ def test_context_only_takes_documents(tmp_path):
         (tmp_path / n).write_text('x', encoding='utf-8')
     j = judge.JudgeConfig.from_config({'judge': {'context': ['*', '.*']}}, tmp_path)
     assert sorted(pathlib.Path(p).name for p in j.context) == ['a.md', 'b.txt']
+
+
+FOLDERS = {('大学',), ('学習',), ('学習', '数学')}
+
+
+def test_fit_folder_takes_known_folders_and_one_new_level_below_them():
+    assert judge.fit_folder('大学', FOLDERS) == ('大学',)
+    assert judge.fit_folder(' 大学 / 応数B ', FOLDERS) == ('大学', '応数B')
+    assert judge.fit_folder('学習/数学/複素解析', FOLDERS) == ('学習', '数学', '複素解析')
+    assert judge.fit_folder('大学/応数B/第8回', FOLDERS) is None          # 2 段の新しいフォルダ
+    assert judge.fit_folder('娯楽', FOLDERS) is None                      # 一覧に無い 1 段目
+    assert judge.fit_folder('大学/' + 'あ' * (judge.FOLDER_MAX + 1), FOLDERS) is None
+    assert judge.fit_folder('大学/応数B/DFT', FOLDERS | {('大学', '応数B')}, FOLDERS) is None   # AI が作ったフォルダの下
+    assert judge.fit_folder('大学/応数B', FOLDERS | {('大学', '応数B')}, FOLDERS) == ('大学', '応数B')
+    assert judge._bare('https://u:p@docs.example/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/edit?x=1')         == 'https://docs.example/document/d/…/edit'
+    assert judge.fit_folder(None, FOLDERS) is None and judge.fit_folder('', FOLDERS) is None
+
+
+def test_a_later_tab_keeps_the_folder_the_ai_chose_and_remembers_new_folders(tmp_path, asked):
+    acfg = arrange.ArrangeConfig.from_config(config._merge(CFG, {'arrange': {'folder': [{'path': '大学', 'title': 'x'}]}}))
+    asked.answer = lambda x: {'id': x['id'], 'workspace': '大学', 'stack': None, 'action': 'later', 'folder': '大学/応数B'}
+    v, _ = judge.run([placed(0, 'https://atcoder.jp/fft', 'FFT')], acfg, PRIVACY, [], ON, tmp_path, NOW)
+    assert v['https://atcoder.jp/fft']['folder'] == ['大学', '応数B']
+    assert json.loads((tmp_path / 'judge.json').read_text(encoding='utf-8'))['folders'] == [['大学', '応数B']]
+    assert judge.known_folders(acfg, judge.load(tmp_path / 'judge.json')) == {('大学',), ('大学', '応数B')}
+
+
+@pytest.fixture
+def called(monkeypatch):
+    """call の代わり (ブックマークの振り分け). 送ったプロンプトを記録し, answer で答える."""
+    calls = []
+
+    def fake(prompt, out_schema, jcfg, cwd):
+        items = [json.loads(line) for line in prompt.split('# 振り分けるリンク')[1].splitlines()[1:] if line.startswith('{')]
+        calls.append(items)
+        return {'links': [fake.answer(x) for x in items]}
+    fake.answer = lambda x: {'id': x['id'], 'folder': '大学/応数B'}
+    monkeypatch.setattr(judge, 'call', fake)
+    fake.calls = calls
+    return fake
+
+
+BM_ACFG = arrange.ArrangeConfig.from_config(config._merge(CFG, {'arrange': {'folder': [{'path': '大学', 'title': 'x'}]}}))
+SPLIT = judge.JudgeConfig(enabled=True, split=('大学',))
+
+
+def link(i, url, path=(), title='t'):
+    return {'id': str(i), 'title': title, 'url': url, 'path': list(path)}
+
+
+def test_refile_asks_only_for_top_links_and_split_folders_and_moves_them(tmp_path, called):
+    links = [link(1, 'https://a.example/dft'), link(2, 'https://b.example/x', ['大学']),
+             link(3, 'https://c.example/y', ['動画']), link(4, 'https://d.example/z', ['大学', '応数B']),
+             link(5, 'https://mail.example/inbox'), link(6, 'file:///C:/a.pdf')]
+    moves, line = judge.refile(links, BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
+    assert [x['url'] for x in called.calls[0]] == ['https://a.example/dft', 'https://b.example/x']
+    assert moves == [{'id': '1', 'title': 't', 'from': [], 'path': ['大学', '応数B']},
+                     {'id': '2', 'title': 't', 'from': ['大学'], 'path': ['大学', '応数B']}]
+    assert '2 件' in line
+    # 覚えた判定で, 次は聞かずに同じ移す先を返す. 移した後 (path が移す先) なら移さない
+    again, _ = judge.refile([link(1, 'https://a.example/dft', ['大学', '応数B'])], BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
+    assert again == [] and len(called.calls) == 1
+
+
+def test_refile_ignores_folders_outside_the_list_and_keeps_null_at_the_top(tmp_path, called):
+    called.answer = lambda x: {'id': x['id'], 'folder': None if x['url'].endswith('keep') else '娯楽/漫画'}
+    moves, _ = judge.refile([link(1, 'https://a.example/keep'), link(2, 'https://a.example/bad', ['大学'])],
+                            BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
+    assert moves == []
+    assert judge.load(tmp_path / 'judge.json')['bookmarks'] == {judge._memo_key('https://a.example/keep'): {'folder': [], 'at': NOW}}
+
+
+def test_refile_backs_off_after_a_failure_and_keeps_the_tab_verdicts(tmp_path, monkeypatch):
+    judge.save(tmp_path / 'judge.json', {'basis': 'k', 'tabs': {'u': {}}})
+    monkeypatch.setattr(judge, 'call', lambda *a: (_ for _ in ()).throw(RuntimeError('上限')))
+    moves, line = judge.refile([link(1, 'https://a.example/')], BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
+    assert moves == [] and '失敗' in line
+    data = judge.load(tmp_path / 'judge.json')
+    assert data['tabs'] == {'u': {}} and data['bm_failed'] == NOW
+    monkeypatch.setattr(judge, 'call', lambda *a: pytest.fail('BACKOFF の間に呼んだ'))
+    _, line = judge.refile([link(1, 'https://a.example/')], BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW + 60)
+    assert '呼ばない' in line
+
+
+def test_refile_disabled_does_nothing(tmp_path, called):
+    assert judge.refile([link(1, 'https://a.example/')], BM_ACFG, PRIVACY, judge.JudgeConfig(), tmp_path) == ([], '')
+    assert called.calls == [] and not (tmp_path / 'judge.json').exists()

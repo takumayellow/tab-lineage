@@ -191,10 +191,16 @@ def run(state: pathlib.Path, port: int, profile: pathlib.Path, config_path: str 
         # 1 枚も置けなかった. 済んだことにせず, 次の回にやり直す
         raise RuntimeError(f'案のタブを 1 枚も置けなかった ({len(res["failed"])} 件失敗)')
     if refile:
+        from .cli import move_bookmarks, refile_plan
         acfg = arrange.ArrangeConfig.from_config(config.load(config_path))
-        moves = arrange.refile_moves(vivaldi.reading_links(port, acfg.reading_root), acfg)
+        moves, refile_line = refile_plan(vivaldi.reading_links(port, acfg.reading_root), config_path, state)
+        lines += [refile_line] if refile_line else []
         if moves:
-            lines.append(f'あとで読むを振り分けた {vivaldi.move(port, acfg.reading_root, moves)["moved"]} 件')
+            try:   # 控えを取れない・移せないときも, タブを並べた回は済んだことにする
+                res = move_bookmarks(port, acfg.reading_root, moves, profile, state)
+                lines.append(f'あとで読むを振り分けた {res["moved"]} 件')
+            except (Exception, SystemExit) as e:
+                lines.append(f'あとで読むを振り分けなかった: {type(e).__name__}: {e}')
     # 適用で変わった後のタブを覚える. 次の回はここから URL が変わったときだけ整理する
     try:
         after = vivaldi.tabs(port)
