@@ -118,15 +118,18 @@ def prune(state: pathlib.Path, keep: int = KEEP_RUNS) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
-def make_plan(history: pathlib.Path, tabs: list[dict], config_path: str | None, labels_path: str | None) -> dict:
-    from .cli import analyze
+def make_plan(history: pathlib.Path, tabs: list[dict], config_path: str | None, labels_path: str | None,
+              state: pathlib.Path | None = None) -> tuple[dict, str]:
+    """(案, AI の判定のログの行) を返す. state が無ければ AI に判定させない."""
+    from .cli import analyze, judged
     r = analyze([str(history)], config_path)
     acfg = arrange.ArrangeConfig.from_config(r.cfg)
     placed = plan.classify(to_tabs(tabs), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
                            labels=config.load_labels(labels_path),
                            anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy), visits=r.visits,
                            local=True)
-    return arrange.validate(arrange.build(placed, acfg))
+    verdicts, line = judged(r, placed, acfg, config_path, state)
+    return arrange.validate(arrange.build(placed, acfg, verdicts)), line
 
 
 def check(state: pathlib.Path, port: int, idle_min: float, force: bool,
@@ -172,12 +175,13 @@ def run(state: pathlib.Path, port: int, profile: pathlib.Path, config_path: str 
         raise Skip(f'{run_dir.name} が既にある')
     history = snapshot.copy_history(profile, run_dir)
     try:
-        arr = make_plan(history, tabs, config_path, labels_path)
+        arr, judge_line = make_plan(history, tabs, config_path, labels_path, state)
     finally:
         history.unlink(missing_ok=True)   # 大きい. 案と控えがあれば足りる
     (run_dir / 'plan.json').write_text(json.dumps(arr, ensure_ascii=False, indent=1), encoding='utf-8')
     (run_dir / 'before.json').write_text(json.dumps(tabs, ensure_ascii=False, indent=1), encoding='utf-8')
-    lines = ([f'操作中なので, {idle_min:g} 分以内に見たタブには触らない'] if busy else []) + [arrange.outline(arr)]
+    lines = ([f'操作中なので, {idle_min:g} 分以内に見たタブには触らない'] if busy else []) + ([judge_line] if judge_line else [])
+    lines.append(arrange.outline(arr))
     if dry_run:
         return lines
     res = vivaldi.apply(arr, port=port, close=close, quiet=True, recent_ms=int(idle_min * 60_000) if busy else 0,

@@ -78,6 +78,16 @@ pip install git+https://github.com/takumayellow/tab-lineage
    ```
    出力には URL と題名がそのまま入るので，リポジトリやサイトに載せない．
 
+   規則は題名や URL の言葉で決めるので，「競プロのための高速フーリエ変換」を授業の復習でも競プロへ入れてしまう．設定に `[judge]` を書くと，規則の案の上に AI（Claude Code の `claude -p`，ツール無し）の判定を重ねる．タブごとに置くワークスペース，スタックの名前，片付け方（残す／あとで読むへ移す／閉じる）を，`context` のファイル（ワークスペースの説明や授業の計画）と照らして決めさせる．判定は URL ごとに `--state` のフォルダ（既定は `auto` と同じ）の `judge.json` に 3 日覚え，まだ判定していないタブがあるときだけ呼ぶ．`context` かワークスペースの一覧を変えると全部判定し直す．呼べないとき（使用の上限など）は規則の案のまま進め，1 時間は呼ばない．伏せるページ（`[privacy.mask]`）と手元のファイルは送らず，URL はクエリを落として送る．`--no-judge` で切れる．`judge.json` にも題名が入るので公開しない．
+
+   ```toml
+   [judge]
+   enabled = true
+   model = "haiku"
+   context = ["judge.md", "~/dev/materials/*/README.md"]   # 相対パスは設定のファイルから
+   # config_dir = "~/.claude-other"                     # 別のアカウントで呼ぶとき (CLAUDE_CONFIG_DIR)
+   ```
+
    起動中の Vivaldi に適用する．
 
    ```sh

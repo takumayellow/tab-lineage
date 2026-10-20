@@ -8,7 +8,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from . import arrange, config, episodes, histdb, lineage, plan, session, site, snapshot
+from . import arrange, config, episodes, histdb, judge, lineage, plan, session, site, snapshot
 from .privacy import Privacy
 
 
@@ -89,6 +89,22 @@ def cmd_build(a) -> None:
     print(f'{out}: {c["episodes"]} 回, {c["nodes"]} 節, {c["visits"]} 訪問, {out.stat().st_size / 2**20:.1f} MB')
 
 
+def judged(r: Analysis, placed: list, acfg: arrange.ArrangeConfig, config_path: str | None,
+           state: pathlib.Path | None) -> tuple[dict[str, dict], str]:
+    """設定の [judge] が enabled なら, 規則の案を AI に判定させる. (URL -> 判定, ログの行).
+    AI の段で何が起きても, 規則の案で進めるよう判定無しを返す."""
+    if state is None:
+        return {}, ''
+    try:
+        jcfg = judge.JudgeConfig.from_config(r.cfg, pathlib.Path(config_path).parent if config_path else None)
+        if not jcfg.enabled:
+            return {}, ''
+        state.mkdir(parents=True, exist_ok=True)
+        return judge.run(placed, acfg, r.privacy, r.visits, jcfg, state)
+    except Exception as e:
+        return {}, f'AI の判定を使わなかった: {type(e).__name__}: {e}'
+
+
 def cmd_arrange(a) -> None:
     r = analyze(a.db, a.config)
     acfg = arrange.ArrangeConfig.from_config(r.cfg)
@@ -96,7 +112,11 @@ def cmd_arrange(a) -> None:
                            labels=config.load_labels(a.labels),
                            anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy), visits=r.visits,
                            local=True)
-    arr = arrange.build(placed, acfg)
+    from .auto import default_state
+    verdicts, line = judged(r, placed, acfg, a.config, None if a.no_judge else pathlib.Path(a.state or default_state()))
+    if line:
+        print(line, file=sys.stderr)
+    arr = arrange.build(placed, acfg, verdicts)
     print(arrange.outline(arr))
     if a.out:
         out = pathlib.Path(a.out)
@@ -225,6 +245,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--session', required=True, help='今のタブのセッションファイル')
     p.add_argument('--labels', help='スレッドに付けた名前の TOML (スタックの名前になる)')
     p.add_argument('--out', help='案を JSON で書き出す (実際の URL と題名が入る. 公開しない)')
+    p.add_argument('--state', help='AI の判定を覚えるディレクトリ (既定は auto と同じ)')
+    p.add_argument('--no-judge', action='store_true', help='設定の [judge] が有効でも AI に判定させない')
     p.set_defaults(func=cmd_arrange)
 
     p = sub.add_parser('apply', help='arrange の案を起動中の Vivaldi の最後に使ったウィンドウに適用する')
