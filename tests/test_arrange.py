@@ -4,7 +4,7 @@ import struct
 
 import pytest
 from _util import make_history, nav, record, snss, visit
-from tab_lineage import arrange, cli, config, plan, vivaldi
+from tab_lineage import arrange, cli, config, plan, snapshot, vivaldi
 from tab_lineage.histdb import Visit
 from tab_lineage.plan import Placed
 from tab_lineage.privacy import Privacy
@@ -243,12 +243,21 @@ def test_validate_checks_each_workspace(w, msg):
 
 
 def test_refile_moves_only_links_a_folder_rule_hits():
-    links = [{'id': '1', 'title': 'Claude の使い方', 'url': 'https://blog.example/claude'},
-             {'id': '2', 'title': 'どこにも当たらない', 'url': 'https://other.example/'},
-             {'id': '3', 'title': 'tutorial', 'url': 'https://docs.python.org/3/tutorial/'}]
+    links = [{'id': '1', 'title': 'Claude の使い方', 'url': 'https://blog.example/claude', 'path': []},
+             {'id': '2', 'title': 'どこにも当たらない', 'url': 'https://other.example/', 'path': []},
+             {'id': '3', 'title': 'tutorial', 'url': 'https://docs.python.org/3/tutorial/', 'path': []},
+             {'id': '4', 'title': 'Claude 入門', 'url': 'https://blog.example/c2', 'path': ['動画']}]
     assert arrange.refile_moves(links, ACFG) == [
-        {'id': '1', 'title': 'Claude の使い方', 'url': 'https://blog.example/claude', 'path': ['AI']},
-        {'id': '3', 'title': 'tutorial', 'url': 'https://docs.python.org/3/tutorial/', 'path': ['言語', 'Python']}]
+        {'id': '1', 'title': 'Claude の使い方', 'url': 'https://blog.example/claude', 'from': [], 'path': ['AI']},
+        {'id': '3', 'title': 'tutorial', 'url': 'https://docs.python.org/3/tutorial/', 'from': [],
+         'path': ['言語', 'Python']}]
+
+
+def test_build_puts_a_later_tab_in_the_folder_the_ai_chose():
+    tabs = [placed(0, 'https://blog.example/claude', 'Claude の使い方', ws='大学')]
+    v = {plan.page_key('https://blog.example/claude'): {'workspace': '大学', 'stack': None, 'action': 'later',
+                                                    'folder': ['大学', '応数B']}}
+    assert arrange.build(tabs, ACFG, v)['bookmarks']['children'][0]['title'] == '大学'
 
 
 def write_config(tmp_path):
@@ -261,23 +270,53 @@ def write_config(tmp_path):
 def test_cli_refile_dry_run_shows_the_moves_without_moving(tmp_path, monkeypatch, capsys):
     seen = []
     monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: seen.append((port, root)) or [
-        {'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c'}])
+        {'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c', 'path': []}])
     monkeypatch.setattr(vivaldi, 'move', lambda *a: pytest.fail('dry-run で移した'))
-    cli.main(['refile', '--config', str(write_config(tmp_path)), '--port', '9300', '--dry-run'])
+    cli.main(['refile', '--config', str(write_config(tmp_path)), '--port', '9300', '--dry-run',
+              '--state', str(tmp_path / 'state')])
     assert seen == [(9300, '後で')]
-    assert '後で/AI <- Claude Code 入門' in capsys.readouterr().out
+    assert '後で -> 後で/AI: Claude Code 入門' in capsys.readouterr().out
 
 
 def test_cli_refile_moves_and_reports(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: [
-        {'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c'},
-        {'id': '8', 'title': 'そのまま', 'url': 'https://other.example/'}])
+        {'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c', 'path': []},
+        {'id': '8', 'title': 'そのまま', 'url': 'https://other.example/', 'path': []}])
     calls = []
     monkeypatch.setattr(vivaldi, 'move', lambda port, root, moves: calls.append((root, moves)) or
                         {'moved': 1, 'skipped': []})
-    cli.main(['refile', '--config', str(write_config(tmp_path))])
-    assert calls == [('後で', [{'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c', 'path': ['AI']}])]
-    assert '振り分けた 1 件 (直下に残した 1 件)' in capsys.readouterr().out
+    profile = tmp_path / 'profile'
+    profile.mkdir()
+    (profile / 'Bookmarks').write_text('{"roots": {}}', encoding='utf-8')
+    state = tmp_path / 'state'
+    cli.main(['refile', '--config', str(write_config(tmp_path)), '--profile-dir', str(profile), '--state', str(state)])
+    assert calls == [('後で', [{'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c', 'path': ['AI'],
+                                'from': []}])]
+    assert '振り分けた 1 件 (動かさなかった 1 件)' in capsys.readouterr().out
+    # 移す前にブックマークのファイルを控える
+    assert [p.read_text(encoding='utf-8') for p in (state / 'bookmarks').glob('Bookmarks-*.json')] == ['{"roots": {}}']
+
+
+def test_cli_refile_does_not_move_without_a_backup(tmp_path, monkeypatch):
+    monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: [
+        {'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c', 'path': []}])
+    monkeypatch.setattr(vivaldi, 'move', lambda *a: pytest.fail('控えの無いまま移した'))
+    with pytest.raises(OSError):
+        cli.main(['refile', '--config', str(write_config(tmp_path)), '--profile-dir', str(tmp_path / 'none'),
+                  '--state', str(tmp_path / 'state')])
+
+
+def test_backup_bookmarks_keeps_the_newest_generations(tmp_path):
+    profile = tmp_path / 'p'
+    profile.mkdir()
+    (profile / 'Bookmarks').write_text('new', encoding='utf-8')
+    out = tmp_path / 'b'
+    out.mkdir()
+    for k in range(3):
+        (out / f'Bookmarks-2026010{k}-000000.json').write_text(str(k), encoding='utf-8')
+    snapshot.backup_bookmarks(profile, out, keep=2)
+    kept = sorted(p.read_text(encoding='utf-8') for p in out.glob('Bookmarks-*.json'))
+    assert kept == ['2', 'new']
 
 
 def test_move_expression_embeds_root_and_moves_as_json():
@@ -385,3 +424,11 @@ def test_close_title_sends_error_pages_to_close():
     arr = arrange.build(ps, cfg)
     assert [(c['title'], c['why']) for c in arr['close']] == [('404 | site', 'エラーのページ'), ('エラー | ITC', 'エラーのページ')]
     assert arr['workspaces'][0]['items'][0]['tabs'] == [['4040 の話', 'https://a.example/z']]
+
+
+def test_build_passes_the_workspace_order_and_check_rejects_a_bad_one():
+    arr = arrange.build([], arrange.ArrangeConfig(order=('大学', '競プロ')))
+    assert arr['order'] == ['大学', '競プロ']
+    arrange.validate(arr)
+    with pytest.raises(ValueError):
+        arrange.validate({**arr, 'order': [1]})

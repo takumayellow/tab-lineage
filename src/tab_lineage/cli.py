@@ -125,18 +125,51 @@ def cmd_arrange(a) -> None:
         print(f'{out}: 手で直してから apply に渡せる')
 
 
+def refile_plan(links: list[dict], config_path: str | None, state: pathlib.Path | None) -> tuple[list[dict], str]:
+    """あとで読むのリンクの移す先. 直下のリンクはフォルダの規則で振り分け, 規則に当たらないものと [judge] split の
+    フォルダの中身は, [judge] が enabled なら AI に決めさせる. AI の段で何が起きても規則の分だけで進める."""
+    cfg = config.load(config_path)
+    acfg = arrange.ArrangeConfig.from_config(cfg)
+    moves = arrange.refile_moves(links, acfg)
+    if state is None:
+        return moves, ''
+    ruled = {m['id'] for m in moves}
+    try:
+        jcfg = judge.JudgeConfig.from_config(cfg, pathlib.Path(config_path).parent if config_path else None)
+        if not jcfg.enabled:
+            return moves, ''
+        state.mkdir(parents=True, exist_ok=True)
+        ai, line = judge.refile([x for x in links if x['id'] not in ruled], acfg,
+                                Privacy.from_config(cfg.get('privacy', {})), jcfg, state)
+        return moves + ai, line
+    except Exception as e:
+        return moves, f'あとで読むの AI の振り分けを使わなかった: {type(e).__name__}: {e}'
+
+
+def move_bookmarks(port: int, root: str, moves: list[dict], profile: pathlib.Path, state: pathlib.Path) -> dict:
+    """ブックマークのファイルの控えを取ってから移す. 控えを取れなければ移さない (OSError)."""
+    from . import vivaldi
+    snapshot.backup_bookmarks(profile, state / 'bookmarks')
+    return vivaldi.move(port, root, moves)
+
+
 def cmd_refile(a) -> None:
     from . import vivaldi
+    from .auto import default_state
     acfg = arrange.ArrangeConfig.from_config(config.load(a.config))
     links = vivaldi.reading_links(a.port, acfg.reading_root)
-    moves = arrange.refile_moves(links, acfg)
+    state = pathlib.Path(a.state) if a.state else default_state()
+    moves, line = refile_plan(links, a.config, None if a.no_judge else state)
+    if line:
+        print(line, file=sys.stderr)
     for m in moves:
-        print(f'{"/".join([acfg.reading_root, *m["path"]])} <- {m["title"]}')
+        print(f'{"/".join([acfg.reading_root, *m["from"]])} -> {"/".join([acfg.reading_root, *m["path"]])}: {m["title"]}')
     if a.dry_run or not moves:
-        print(f'振り分ける {len(moves)} 件 (直下に残す {len(links) - len(moves)} 件)')
+        print(f'振り分ける {len(moves)} 件 (動かさない {len(links) - len(moves)} 件)')
         return
-    res = vivaldi.move(a.port, acfg.reading_root, moves)
-    print(f'振り分けた {res["moved"]} 件 (直下に残した {len(links) - res["moved"]} 件)')
+    profile = pathlib.Path(a.profile_dir) if a.profile_dir else snapshot.default_profile(a.browser, a.profile)
+    res = move_bookmarks(a.port, acfg.reading_root, moves, profile, state)
+    print(f'振り分けた {res["moved"]} 件 (動かさなかった {len(links) - res["moved"]} 件)')
     for s in res['skipped']:
         print(f'移さなかった: {s}')
 
@@ -172,6 +205,8 @@ def apply_report(res: dict, close: bool) -> list[str]:
     lines += [f'できなかった: {f}' for f in res['failed']]
     if res['created']:
         lines.append('作ったワークスペース: ' + ', '.join(res['created']))
+    if res.get('reordered'):
+        lines.append('ワークスペースを並べ直した: ' + ', '.join(res['reordered']))
     if res['left']:
         lines.append(f'閉じなかったタブ {len(res["left"])} 枚 (案に無い・固定した・移せなかったタブ):' if close else
                      f'残したタブ {len(res["left"])} 枚 (閉じるなら --close):')
@@ -258,9 +293,14 @@ def main(argv: list[str] | None = None) -> None:
                    help='閉じる案のタブとブックマークに入れたタブを閉じる')
     p.set_defaults(func=cmd_apply)
 
-    p = sub.add_parser('refile', help='あとで読むの直下のブックマークを, 設定のフォルダの規則で振り分け直す')
+    p = sub.add_parser('refile', help='あとで読むのブックマークを, 設定のフォルダの規則と AI の判定で振り分け直す')
     p.add_argument('--config', help='設定の TOML (既定値に重ねる)')
     p.add_argument('--port', type=int, default=9222, help='Vivaldi の --remote-debugging-port')
+    p.add_argument('--browser', default='vivaldi', choices=snapshot.BROWSERS)
+    p.add_argument('--profile', default='Default')
+    p.add_argument('--profile-dir', help='プロファイルのディレクトリを直接指定する (ブックマークの控えを取る)')
+    p.add_argument('--state', help='AI の判定とブックマークの控えを置くディレクトリ (既定 %%LOCALAPPDATA%%/tab-lineage/auto)')
+    p.add_argument('--no-judge', action='store_true', help='設定の [judge] が有効でも AI に振り分けさせない')
     p.add_argument('--dry-run', action='store_true', help='移す先を表示するだけで移さない')
     p.set_defaults(func=cmd_refile)
 

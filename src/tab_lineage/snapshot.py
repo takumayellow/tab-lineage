@@ -35,6 +35,20 @@ def default_profile(browser: str = 'vivaldi', profile: str = 'Default') -> pathl
     return base / profile
 
 
+BOOKMARK_KEEP = 10   # 控えておくブックマークのファイルの世代
+
+
+def backup_bookmarks(profile: pathlib.Path, out_dir: pathlib.Path, keep: int = BOOKMARK_KEEP) -> pathlib.Path:
+    """ブックマークを動かす前に, プロファイルの Bookmarks を out_dir へ時刻つきで写す. 古いものは keep 世代まで残す.
+    写せなければ OSError (控えの無いまま動かさない)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dst = out_dir / f'Bookmarks-{time.strftime("%Y%m%d-%H%M%S")}.json'
+    shutil.copy2(profile / 'Bookmarks', dst)
+    for old in sorted(out_dir.glob('Bookmarks-*.json'))[:-keep]:
+        old.unlink(missing_ok=True)
+    return dst
+
+
 def copy_history(profile: pathlib.Path, out_dir: pathlib.Path, tries: int = 3, wait: float = 2.0) -> pathlib.Path:
     src = profile / 'History'
     if not src.is_file():

@@ -56,6 +56,14 @@ JS = r'''
     ids[w.name] = internals.act.addWorkspaceWithId(Date.now() + k, w.name, '', w.emoji || undefined);
     createdWs.push(w.name);
   }
+  // 作ったワークスペースは末尾に足されるので, arr.order の順に並べ直す. order に無いものは今の並びのまま後ろへ
+  let reordered = [];
+  if (Array.isArray(arr.order) && internals.act && typeof internals.act.setOrder === 'function') {
+    const now = (await listed()).map(x => [x.id, x.name]);
+    const rank = n => { const k = arr.order.indexOf(n); return k < 0 ? arr.order.length : k; };
+    const want = [...now].sort((a, b) => rank(a[1]) - rank(b[1]));
+    if (want.some((w, k) => w[0] !== now[k][0])) { internals.act.setOrder(want.map(w => w[0])); reordered = want.map(w => w[1]); }
+  }
 
   const extOf = t => { try { return JSON.parse(t.vivExtData || '{}'); } catch (e) { return {}; } };
   const urlOf = t => t.pendingUrl || t.url;
@@ -237,7 +245,7 @@ JS = r'''
       } catch (e) { /* 読み込み中などで休止できないタブは残す */ }
     }
   }
-  return {window: win.id, workspaces: ids, created: createdWs, tabs: placed.length, made: opened, adopted, already, kept, stacks,
+  return {window: win.id, workspaces: ids, created: createdWs, reordered, tabs: placed.length, made: opened, adopted, already, kept, stacks,
           failed, bookmarks: marks, closed, left, hibernated, switched, guarded, doubted};
 })
 '''
@@ -468,28 +476,37 @@ def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = Fal
     return {**res, 'dirty': len(forms['dirty']), 'unknown': res.get('doubted', 0)}
 
 
-# ブックマークバーの root のフォルダの直下にあるリンク
+# ブックマークバーの root のフォルダの直下と, その 1 段下のフォルダの直下にあるリンク. path は root から見たフォルダ
 READING = r'''(async root => {
   const bar = (await chrome.bookmarks.getTree())[0].children[0];
   const f = (await chrome.bookmarks.getChildren(bar.id)).find(c => !c.url && c.title === root);
   if (!f) return [];
-  return (await chrome.bookmarks.getChildren(f.id)).filter(c => c.url).map(c => ({id: c.id, title: c.title, url: c.url}));
+  const kids = await chrome.bookmarks.getChildren(f.id);
+  const out = kids.filter(c => c.url).map(c => ({id: c.id, title: c.title, url: c.url, path: []}));
+  for (const d of kids.filter(c => !c.url))
+    for (const c of await chrome.bookmarks.getChildren(d.id))
+      if (c.url) out.push({id: c.id, title: c.title, url: c.url, path: [d.title]});
+  return out;
 })'''
 
-# root の直下のリンクを, root の下のフォルダ (無ければ作る) へ移す. 移す先に同じ URL があれば移さない
+# root/from のリンクを, root の下のフォルダ (無ければ作る) へ移す. 今 root/from に無いものと, 移す先に同じ URL があるものは移さない
 MOVE = r'''
 (async (root, moves) => {
   const bar = (await chrome.bookmarks.getTree())[0].children[0];
   const folder = async (parentId, title) =>
     (await chrome.bookmarks.getChildren(parentId)).find(c => !c.url && c.title === title) ||
     await chrome.bookmarks.create({parentId, title});
+  const find = async (parentId, title) =>
+    (await chrome.bookmarks.getChildren(parentId)).find(c => !c.url && c.title === title);
   const top = await folder(bar.id, root);
   let moved = 0;
   const skipped = [];
   for (const m of moves) {
     try {
+      let fromId = top.id;
+      for (const name of m.from || []) fromId = fromId && (await find(fromId, name) || {}).id;
       const [node] = await chrome.bookmarks.get(m.id);
-      if (!node || node.parentId !== top.id) { skipped.push(`${m.title}: 直下に無い`); continue; }
+      if (!node || !fromId || node.parentId !== fromId) { skipped.push(`${m.title}: 元の場所に無い`); continue; }
       let parentId = top.id;
       for (const name of m.path) parentId = (await folder(parentId, name)).id;
       if ((await chrome.bookmarks.getChildren(parentId)).some(c => c.url === node.url)) {
@@ -507,7 +524,7 @@ MOVE = r'''
 
 
 def reading_links(port: int, root: str) -> list[dict]:
-    """ブックマークバーの root のフォルダの直下にあるリンク ({id, title, url})."""
+    """ブックマークバーの root のフォルダの直下と 1 段下にあるリンク ({id, title, url, path})."""
     return evaluate(ui_page(port), f'{READING}({json.dumps(root)})', timeout=30)
 
 
@@ -517,5 +534,5 @@ def move_expression(root: str, moves: list[dict]) -> str:
 
 
 def move(port: int, root: str, moves: list[dict]) -> dict:
-    """moves ({id, title, path}) のリンクを root/path のフォルダへ移す. {moved, skipped} を返す."""
+    """moves ({id, title, from, path}) のリンクを root/from から root/path のフォルダへ移す. {moved, skipped} を返す."""
     return evaluate(ui_page(port), move_expression(root, moves), timeout=60)
