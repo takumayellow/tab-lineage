@@ -41,6 +41,13 @@ def _node(g: Graph, tl: Timeline, i: int, ep, thread: int, ws_index: dict[str, i
     return d
 
 
+def site_links(cfg: dict) -> list[dict]:
+    """上の帯に足すほかのサイトへのリンク ([[site.link]] の label と url). http(s) の URL だけ認める."""
+    return [{'label': x['label'], 'url': x['url']} for x in cfg.get('site', {}).get('link', ())
+            if isinstance(x, dict) and isinstance(x.get('label'), str) and x['label'].strip()
+            and isinstance(x.get('url'), str) and x['url'].lower().startswith(('http://', 'https://'))]
+
+
 def payload(g: Graph, tl: Timeline, cfg: dict, labels: dict | None = None, plan: dict | None = None,
             built_at: dt.datetime | None = None) -> dict:
     labels = labels or {}
@@ -70,6 +77,7 @@ def payload(g: Graph, tl: Timeline, cfg: dict, labels: dict | None = None, plan:
         'meta': {
             'title': cfg.get('site', {}).get('title', 'Tab Lineage'),
             'lede': cfg.get('site', {}).get('lede', ''),
+            'links': site_links(cfg),
             'built_at': built_at.isoformat(timespec='minutes'),
             'tz': [list(o) for o in tl.tz_offsets],
             'range': [episodes[0]['t0'], episodes[-1]['t1']] if episodes else None,

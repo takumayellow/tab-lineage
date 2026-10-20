@@ -476,20 +476,23 @@ def apply(arr: dict, port: int = 9222, hibernate: bool = True, close: bool = Fal
     return {**res, 'dirty': len(forms['dirty']), 'unknown': res.get('doubted', 0)}
 
 
-# ブックマークバーの root のフォルダの直下と, その 1 段下のフォルダの直下にあるリンク. path は root から見たフォルダ
+# ブックマークバーの root のフォルダの下にある全部のリンク. path は root から見たフォルダ
 READING = r'''(async root => {
   const bar = (await chrome.bookmarks.getTree())[0].children[0];
   const f = (await chrome.bookmarks.getChildren(bar.id)).find(c => !c.url && c.title === root);
   if (!f) return [];
-  const kids = await chrome.bookmarks.getChildren(f.id);
-  const out = kids.filter(c => c.url).map(c => ({id: c.id, title: c.title, url: c.url, path: []}));
-  for (const d of kids.filter(c => !c.url))
-    for (const c of await chrome.bookmarks.getChildren(d.id))
-      if (c.url) out.push({id: c.id, title: c.title, url: c.url, path: [d.title]});
+  const out = [];
+  const walk = (node, path) => {
+    for (const c of node.children || [])
+      if (c.url) out.push({id: c.id, title: c.title, url: c.url, path});
+      else walk(c, [...path, c.title]);
+  };
+  walk((await chrome.bookmarks.getSubTree(f.id))[0], []);
   return out;
 })'''
 
-# root/from のリンクを, root の下のフォルダ (無ければ作る) へ移す. 今 root/from に無いものと, 移す先に同じ URL があるものは移さない
+# root/from のリンクを, 消す (drop) か, root/path のフォルダ (無ければ作る) へ移し, 題名を rename に付け直す.
+# 今 root/from に無いものには何もしない. 移す先に同じ URL があれば移さない
 MOVE = r'''
 (async (root, moves) => {
   const bar = (await chrome.bookmarks.getTree())[0].children[0];
@@ -499,14 +502,22 @@ MOVE = r'''
   const find = async (parentId, title) =>
     (await chrome.bookmarks.getChildren(parentId)).find(c => !c.url && c.title === title);
   const top = await folder(bar.id, root);
-  let moved = 0;
-  const skipped = [];
+  let moved = 0, renamed = 0;
+  const skipped = [], removed = [];
   for (const m of moves) {
     try {
       let fromId = top.id;
       for (const name of m.from || []) fromId = fromId && (await find(fromId, name) || {}).id;
       const [node] = await chrome.bookmarks.get(m.id);
       if (!node || !fromId || node.parentId !== fromId) { skipped.push(`${m.title}: 元の場所に無い`); continue; }
+      if (m.drop) {
+        if (!node.url) { skipped.push(`${m.title}: リンクではない`); continue; }
+        await chrome.bookmarks.remove(m.id);
+        removed.push({id: m.id, title: node.title, url: node.url});
+        continue;
+      }
+      if (m.rename) { await chrome.bookmarks.update(m.id, {title: m.rename}); renamed++; }
+      if (!m.path) continue;
       let parentId = top.id;
       for (const name of m.path) parentId = (await folder(parentId, name)).id;
       if ((await chrome.bookmarks.getChildren(parentId)).some(c => c.url === node.url)) {
@@ -519,12 +530,12 @@ MOVE = r'''
       skipped.push(`${m.title}: ${e.message || e}`);
     }
   }
-  return {moved, skipped};
+  return {moved, renamed, removed, skipped};
 })'''
 
 
 def reading_links(port: int, root: str) -> list[dict]:
-    """ブックマークバーの root のフォルダの直下と 1 段下にあるリンク ({id, title, url, path})."""
+    """ブックマークバーの root のフォルダの下にある全部のリンク ({id, title, url, path})."""
     return evaluate(ui_page(port), f'{READING}({json.dumps(root)})', timeout=30)
 
 
@@ -534,5 +545,6 @@ def move_expression(root: str, moves: list[dict]) -> str:
 
 
 def move(port: int, root: str, moves: list[dict]) -> dict:
-    """moves ({id, title, from, path}) のリンクを root/from から root/path のフォルダへ移す. {moved, skipped} を返す."""
+    """moves ({id, title, from} に path / rename / drop) のリンクを, root/from から root/path のフォルダへ移す・
+    題名を付け直す・消す. {moved, renamed, removed: [{id, title, url}], skipped} を返す."""
     return evaluate(ui_page(port), move_expression(root, moves), timeout=60)

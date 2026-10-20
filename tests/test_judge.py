@@ -244,9 +244,9 @@ def called(monkeypatch):
     calls = []
 
     def fake(prompt, out_schema, jcfg, cwd):
-        items = [json.loads(line) for line in prompt.split('# 振り分けるリンク')[1].splitlines()[1:] if line.startswith('{')]
+        items = [json.loads(line) for line in prompt.split('# 判定するリンク')[1].splitlines()[1:] if line.startswith('{')]
         calls.append(items)
-        return {'links': [fake.answer(x) for x in items]}
+        return {'links': [{'keep': True, 'title': None, **fake.answer(x)} for x in items]}
     fake.answer = lambda x: {'id': x['id'], 'folder': '大学/応数B'}
     monkeypatch.setattr(judge, 'call', fake)
     fake.calls = calls
@@ -261,15 +261,18 @@ def link(i, url, path=(), title='t'):
     return {'id': str(i), 'title': title, 'url': url, 'path': list(path)}
 
 
-def test_refile_asks_only_for_top_links_and_split_folders_and_moves_them(tmp_path, called):
+def test_refile_moves_only_top_links_and_split_folders_but_judges_every_link(tmp_path, called):
     links = [link(1, 'https://a.example/dft'), link(2, 'https://b.example/x', ['大学']),
              link(3, 'https://c.example/y', ['動画']), link(4, 'https://d.example/z', ['大学', '応数B']),
              link(5, 'https://mail.example/inbox'), link(6, 'file:///C:/a.pdf')]
     moves, line = judge.refile(links, BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
-    assert [x['url'] for x in called.calls[0]] == ['https://a.example/dft', 'https://b.example/x']
+    sent = called.calls[0]
+    assert [(x['url'], x['refile']) for x in sent] == [
+        ('https://a.example/dft', True), ('https://b.example/x', True), ('https://c.example/y', False),
+        ('https://d.example/z', False)]
     assert moves == [{'id': '1', 'title': 't', 'from': [], 'path': ['大学', '応数B']},
                      {'id': '2', 'title': 't', 'from': ['大学'], 'path': ['大学', '応数B']}]
-    assert '2 件' in line
+    assert '4 件' in line
     # 覚えた判定で, 次は聞かずに同じ移す先を返す. 移した後 (path が移す先) なら移さない
     again, _ = judge.refile([link(1, 'https://a.example/dft', ['大学', '応数B'])], BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
     assert again == [] and len(called.calls) == 1
@@ -280,7 +283,58 @@ def test_refile_ignores_folders_outside_the_list_and_keeps_null_at_the_top(tmp_p
     moves, _ = judge.refile([link(1, 'https://a.example/keep'), link(2, 'https://a.example/bad', ['大学'])],
                             BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
     assert moves == []
-    assert judge.load(tmp_path / 'judge.json')['bookmarks'] == {judge._memo_key('https://a.example/keep'): {'folder': [], 'at': NOW}}
+    assert judge.load(tmp_path / 'judge.json')['bookmarks'] == {
+        judge._memo_key('https://a.example/keep'): {'keep': True, 'folder': [], 'at': NOW},
+        judge._memo_key('https://a.example/bad'): {'keep': True, 'at': NOW}}
+
+
+def test_refile_drops_links_not_worth_keeping_and_renames_weak_titles(tmp_path, called):
+    called.answer = lambda x: {'id': x['id'], 'folder': x['now'] or None, 'keep': not x['url'].endswith('quiz'),
+                               'title': '確統2 第3回 資料' if x['weak'] else 'AI の題名'}
+    links = [link(1, 'https://letus.example/quiz', ['大学'], '小テストのレビュー'),
+             link(2, 'https://letus.example/files/03.pdf', ['大学'], '03.pdf'),
+             link(3, 'https://blog.example/fft', ['学習', '数学'], 'FFT の解説'),
+             link(4, 'https://blog.example/a', [], 'https://blog.example/a')]
+    moves, _ = judge.refile(links, BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
+    assert [x['weak'] for x in called.calls[0]] == [False, True, False, True]
+    assert moves == [
+        {'id': '2', 'title': '03.pdf', 'from': ['大学'], 'rename': '確統2 第3回 資料'},
+        {'id': '4', 'title': 'https://blog.example/a', 'from': [], 'rename': '確統2 第3回 資料'},
+        {'id': '1', 'title': '小テストのレビュー', 'url': 'https://letus.example/quiz', 'from': ['大学'], 'drop': True}]
+
+
+def test_refile_drops_nothing_when_the_ai_wants_to_drop_too_many(tmp_path, called):
+    called.answer = lambda x: {'id': x['id'], 'folder': None, 'keep': x['url'].endswith('0')}
+    moves, line = judge.refile([link(i, f'https://a.example/{i}') for i in range(4)], BM_ACFG, PRIVACY, SPLIT,
+                               tmp_path, NOW)
+    assert moves == [] and '多すぎる' in line
+
+
+def test_refile_drops_at_most_drop_max_links_at_once(tmp_path, called, monkeypatch):
+    monkeypatch.setattr(judge, 'DROP_MAX', 2)
+    called.answer = lambda x: {'id': x['id'], 'folder': None, 'keep': int(x['id']) >= 3}
+    moves, line = judge.refile([link(i, f'https://a.example/{i}') for i in range(10)], BM_ACFG, PRIVACY, SPLIT,
+                               tmp_path, NOW)
+    assert [m['id'] for m in moves if m.get('drop')] == ['0', '1'] and '次の回' in line
+
+
+def test_refile_never_drops_a_link_the_user_put_back(tmp_path, called):
+    judge.mark_dropped(tmp_path, ['https://letus.example/quiz'], NOW)
+    called.answer = lambda x: {'id': x['id'], 'folder': None, 'keep': False}
+    links = [link(1, 'https://letus.example/quiz'), *[link(i, f'https://a.example/{i}', title='記事') for i in range(2, 5)]]
+    moves, _ = judge.refile(links, BM_ACFG, PRIVACY, SPLIT, tmp_path, NOW)
+    assert [m['id'] for m in moves if m.get('drop')] == []   # 1 は戻したもの, 残り 3/4 は多すぎるので消さない
+    memo = judge.load(tmp_path / 'judge.json')['bookmarks'][judge._memo_key('https://letus.example/quiz')]
+    assert memo['keep'] is True and memo['restored'] is True
+
+
+def test_weak_title():
+    assert judge.weak_title('', 'https://a.example/')
+    assert judge.weak_title('https://a.example/x', 'https://a.example/x')
+    assert judge.weak_title('www.example.com', 'https://www.example.com/')
+    assert judge.weak_title('example.com', 'https://www.example.com/')
+    assert judge.weak_title('lecture03.PDF', 'https://a.example/lecture03.pdf')
+    assert not judge.weak_title('FFT の解説', 'https://a.example/fft')
 
 
 def test_refile_backs_off_after_a_failure_and_keeps_the_tab_verdicts(tmp_path, monkeypatch):

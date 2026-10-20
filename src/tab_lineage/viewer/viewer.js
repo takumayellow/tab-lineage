@@ -483,6 +483,11 @@
 
   // ---- 画面の切り替え ----
   document.getElementById('brand').textContent = M.title;
+  (M.links || []).filter((l) => /^https?:\/\//i.test(l.url)).forEach((l) => {
+    const a = el('a', 'out', `${l.label} ↗`);
+    a.href = l.url;
+    document.querySelector('.bar-in').append(a);
+  });
   function route() {
     const hash = location.hash.replace(/^#/, '') || '/';
     const [, name = '', arg = ''] = hash.split('/');

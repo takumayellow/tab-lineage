@@ -198,7 +198,8 @@ def run(state: pathlib.Path, port: int, profile: pathlib.Path, config_path: str 
         if moves:
             try:   # 控えを取れない・移せないときも, タブを並べた回は済んだことにする
                 res = move_bookmarks(port, acfg.reading_root, moves, profile, state)
-                lines.append(f'あとで読むを振り分けた {res["moved"]} 件')
+                lines.append(f'あとで読むを振り分けた {res["moved"]} 件, 題名を直した {res.get("renamed", 0)} 件, '
+                             f'消した {len(res.get("removed") or [])} 件')
             except (Exception, SystemExit) as e:
                 lines.append(f'あとで読むを振り分けなかった: {type(e).__name__}: {e}')
     # 適用で変わった後のタブを覚える. 次の回はここから URL が変わったときだけ整理する

@@ -4,7 +4,7 @@ import struct
 
 import pytest
 from _util import make_history, nav, record, snss, visit
-from tab_lineage import arrange, cli, config, plan, snapshot, vivaldi
+from tab_lineage import arrange, cli, config, judge, plan, snapshot, vivaldi
 from tab_lineage.histdb import Visit
 from tab_lineage.plan import Placed
 from tab_lineage.privacy import Privacy
@@ -292,9 +292,49 @@ def test_cli_refile_moves_and_reports(tmp_path, monkeypatch, capsys):
     cli.main(['refile', '--config', str(write_config(tmp_path)), '--profile-dir', str(profile), '--state', str(state)])
     assert calls == [('後で', [{'id': '7', 'title': 'Claude Code 入門', 'url': 'https://blog.example/c', 'path': ['AI'],
                                 'from': []}])]
-    assert '振り分けた 1 件 (動かさなかった 1 件)' in capsys.readouterr().out
+    assert '振り分けた 1 件, 題名を直した 0 件, 消した 0 件 (触らなかった 1 件)' in capsys.readouterr().out
     # 移す前にブックマークのファイルを控える
     assert [p.read_text(encoding='utf-8') for p in (state / 'bookmarks').glob('Bookmarks-*.json')] == ['{"roots": {}}']
+
+
+def test_cli_refile_records_dropped_links_and_does_not_drop_them_again(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(vivaldi, 'reading_links', lambda port, root: [])
+    moves = [{'id': '7', 'title': '小テスト', 'url': 'https://letus.example/quiz', 'from': ['大学'], 'drop': True}]
+    monkeypatch.setattr(cli, 'refile_plan', lambda links, config_path, state: (moves, ''))
+    monkeypatch.setattr(vivaldi, 'move', lambda port, root, ms: {
+        'moved': 0, 'renamed': 0, 'skipped': [], 'removed': [{'id': '7', 'title': '小テスト', 'url': 'https://letus.example/quiz'}]})
+    profile = tmp_path / 'profile'
+    profile.mkdir()
+    (profile / 'Bookmarks').write_text('{}', encoding='utf-8')
+    state = tmp_path / 'state'
+    cli.main(['refile', '--config', str(write_config(tmp_path)), '--profile-dir', str(profile), '--state', str(state)])
+    assert '消した 1 件' in capsys.readouterr().out
+    rec = [json.loads(x) for x in (state / 'bookmarks' / 'dropped.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert [(r['title'], r['url'], r['path']) for r in rec] == [('小テスト', 'https://letus.example/quiz', ['後で', '大学'])]
+    memo = judge.load(state / 'judge.json')['bookmarks'][judge._memo_key('https://letus.example/quiz')]
+    assert memo['keep'] is True and memo['restored'] is True
+
+
+def test_cli_refile_protects_and_records_drops_when_the_move_fails(tmp_path, monkeypatch):
+    def boom(port, root, ms):
+        raise TimeoutError('cdp')
+    monkeypatch.setattr(vivaldi, 'move', boom)
+    profile = tmp_path / 'profile'
+    profile.mkdir()
+    (profile / 'Bookmarks').write_text('{}', encoding='utf-8')
+    state = tmp_path / 'state'
+    moves = [{'id': '7', 'title': '小テスト', 'url': 'https://letus.example/quiz', 'from': ['大学'], 'drop': True}]
+    with pytest.raises(TimeoutError):
+        cli.move_bookmarks(9242, '後で', moves, profile, state)
+    rec = [json.loads(x) for x in (state / 'bookmarks' / 'dropped.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert [(r['url'], r['unsure']) for r in rec] == [('https://letus.example/quiz', True)]
+    assert judge.load(state / 'judge.json')['bookmarks'][judge._memo_key('https://letus.example/quiz')]['restored'] is True
+
+
+def test_describe_shows_drops_moves_and_renames():
+    assert cli.describe('後で', {'id': '1', 'title': 'x', 'from': ['大学'], 'drop': True}) == '消す (後で/大学): x'
+    assert cli.describe('後で', {'id': '1', 'title': 'a.pdf', 'from': [], 'rename': '講義 3'}) == '後で: a.pdf => 題名を「講義 3」に'
+    assert cli.describe('後で', {'id': '1', 'title': 'x', 'from': [], 'path': ['AI']}) == '後で -> 後で/AI: x'
 
 
 def test_cli_refile_does_not_move_without_a_backup(tmp_path, monkeypatch):

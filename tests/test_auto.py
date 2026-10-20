@@ -199,7 +199,7 @@ def test_run_refiles_the_reading_folder(tmp_path, profile, live, monkeypatch):
     monkeypatch.setattr(auto.arrange, 'refile_moves', lambda links, acfg: moves)
     monkeypatch.setattr(vivaldi, 'move', lambda port, root, ms: live.append(('move', ms)) or {'moved': len(ms)})
     lines = auto.run(state, 9242, profile, refile=True)
-    assert ('move', moves) in live and 'あとで読むを振り分けた 1 件' in lines
+    assert ('move', moves) in live and 'あとで読むを振り分けた 1 件, 題名を直した 0 件, 消した 0 件' in lines
     assert list((state / 'bookmarks').glob('Bookmarks-*.json'))
 
 
