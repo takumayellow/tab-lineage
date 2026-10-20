@@ -15,6 +15,7 @@ import unicodedata
 from dataclasses import dataclass
 from urllib.parse import unquote
 
+from .episodes import LABEL_MAX
 from .plan import Anchor, Placed
 from .privacy import site_key
 
@@ -47,8 +48,12 @@ class Topic:
         m = next((m for t in texts if t and (m := self.pattern.search(t))), None)
         if not m:
             return None
-        got = self.name.format(*m.groups()) if self.name else (m.group(1) if m.groups() else m.group(0))
-        return unicodedata.normalize('NFKC', got).strip() or None
+        groups = tuple(g or '' for g in m.groups())
+        try:
+            got = self.name.format(*groups) if self.name else (groups[0] if groups else m.group(0))
+        except (IndexError, KeyError):   # name がグループより多く差し込む. 設定の誤りなので名前を付けない
+            return None
+        return unicodedata.normalize('NFKC', got).strip()[:LABEL_MAX] or None
 
 
 @dataclass(frozen=True)
@@ -61,7 +66,7 @@ class ArrangeConfig:
     anchors: tuple[Anchor, ...] = ()        # このページから開いたタブを, ページの名前のスタックにまとめる
     topics: tuple[Topic, ...] = ()
     close_title: re.Pattern | None = None   # 題名がこれに当たるタブ (エラーのページなど) は開き直さない
-    unsorted: str = '未分類'
+    unsorted: str = '未分類'                 # 空ならどこにも当たらないタブを動かさない
     min_stack: int = 2
 
     @classmethod
@@ -74,14 +79,14 @@ class ArrangeConfig:
         anchors = tuple(Anchor(tuple(x.get('match', ())), re.compile(x['name']) if x.get('name') else None)
                         for x in a.get('anchor', ()))
         return cls(
-            # 規則の順を変えるために同じ名前を 2 回書いてもよい. 並べる順は最初に出た所
-            order=tuple(dict.fromkeys(w['name'] for w in cfg.get('workspace', ()))),
+            # 規則の順を変えるために同じ名前を 2 回書いてもよい. 並べる順は arrange.order, 次に最初に出た所
+            order=tuple(dict.fromkeys([*a.get('order', ()), *(w['name'] for w in cfg.get('workspace', ()))])),
             emoji=tuple(a.get('emoji', {}).items()),
             reading_root=a.get('reading_root', 'あとで読む'),
             reading_workspaces=tuple(a.get('reading_workspaces', ())),
             folders=folders,
             anchors=anchors,
-            topics=tuple(Topic(re.compile(t['title'], re.I), t.get('name')) for t in a.get('topic', ())),
+            topics=tuple(Topic(re.compile(t['pattern'], re.I), t.get('name')) for t in a.get('topic', ())),
             close_title=re.compile(a['close_title'], re.I) if a.get('close_title') else None,
             unsorted=a.get('unsorted', '未分類'),
             min_stack=max(2, int(a.get('min_stack', 2))),
@@ -121,7 +126,7 @@ def build(placed: list[Placed], cfg: ArrangeConfig) -> dict:
             close.append({'title': link[0], 'url': link[1], 'why': WHY[status]})
         elif status == 'stash' or p.workspace in cfg.reading_workspaces:
             _insert(bookmarks, cfg.folder_of(p.tab.url, link[0]), link)
-        else:
+        elif p.workspace or cfg.unsorted:   # unsorted が空なら, どこにも当たらないタブは案に入れず元の場所に残す
             ws = p.workspace or cfg.unsorted
             goal = cfg.topic_of(p.tab.url, p.tab.title or '') or p.goal
             groups.setdefault(ws, {}).setdefault(goal, []).append(link)

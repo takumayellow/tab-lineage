@@ -339,9 +339,9 @@ def test_a_workspace_written_twice_is_ordered_where_it_first_appears():
 
 def test_topics_name_stacks_from_the_title_or_the_decoded_url():
     cfg = arrange.ArrangeConfig.from_config(config._merge(CFG, {'arrange': {'topic': [
-        {'title': r'atcoder\.jp/contests/abc(\d+)', 'name': 'ABC{0}'},
-        {'title': '(情報工学実験)'},
-        {'title': 'ｆｏｕｒｉｅｒ|フーリエ'}]}}))
+        {'pattern': r'atcoder\.jp/contests/abc(\d+)', 'name': 'ABC{0}'},
+        {'pattern': '(情報工学実験)'},
+        {'pattern': 'ｆｏｕｒｉｅｒ|フーリエ'}]}}))
     ps = [placed(0, 'https://atcoder.jp/contests/abc479/tasks/abc479_d', 'D - Back', goal='x'),
           placed(1, 'https://atcoder.jp/contests/ABC479/submissions/1', '提出', goal='y'),
           placed(2, 'https://example.com/%E6%83%85%E5%A0%B1%E5%B7%A5%E5%AD%A6%E5%AE%9F%E9%A8%93/a', 'a', goal='z'),
@@ -358,6 +358,24 @@ def test_topic_name_is_normalized_with_nfkc():
     t = arrange.Topic(re.compile(r'(ＡＢＣ\d+)'), None)
     assert t.label('https://x.example/', 'ＡＢＣ１２') == 'ABC12'
     assert arrange.Topic(re.compile('nothing'), None).label('https://x.example/', 't') is None
+    assert arrange.Topic(re.compile('abc'), 'ABC{0}').label('https://x.example/', 'abc') is None   # 差し込むグループが無い
+    assert len(arrange.Topic(re.compile('.+'), None).label('https://x.example/', 'あ' * 80)) == 30
+
+
+def test_order_and_an_empty_unsorted_leave_unmatched_tabs_alone():
+    cfg = arrange.ArrangeConfig.from_config(config._merge(CFG, {'arrange': {'order': ['読みもの', '開発'], 'unsorted': ''}}))
+    ps = [placed(0, 'https://lms.example/a', '講義', ws='大学'), placed(1, 'https://github.com/a', 'repo', ws='開発'),
+          placed(2, 'https://misc.example/', 'misc'), placed(3, 'https://misc.example/old', 'old', status='stash')]
+    arr = arrange.build(ps, cfg)
+    assert [w['name'] for w in arr['workspaces']] == ['開発', '大学']
+    assert arr['bookmarks']['links'] == [['old', 'https://misc.example/old']]
+    assert arr['close'] == []
+
+
+def test_close_title_leaves_other_statuses_alone():
+    cfg = arrange.ArrangeConfig.from_config(config._merge(CFG, {'arrange': {'close_title': '^404'}}))
+    ps = [placed(0, 'https://a.example/', '404', status='dup'), placed(1, 'chrome://newtab/', '404')]
+    assert [c['why'] for c in arrange.build(ps, cfg)['close']] == ['重複', 'ブラウザの画面']
 
 
 def test_close_title_sends_error_pages_to_close():
