@@ -124,7 +124,8 @@ def make_plan(history: pathlib.Path, tabs: list[dict], config_path: str | None, 
     acfg = arrange.ArrangeConfig.from_config(r.cfg)
     placed = plan.classify(to_tabs(tabs), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
                            labels=config.load_labels(labels_path),
-                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy), visits=r.visits)
+                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy), visits=r.visits,
+                           local=True)
     return arrange.validate(arrange.build(placed, acfg))
 
 

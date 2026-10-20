@@ -221,3 +221,14 @@ def test_folded_pages_do_not_use_masked_or_dropped_visits():
     visits = COURSE[:4] + [visit(6, 40, 'https://arp.example/detail', 'ARP の詳細', frm=4)]
     g = lineage.build(visits, LCFG, privacy)
     assert not [u for u in plan._folded_nodes(visits, g, privacy, {}) if 'arp.example' in u]
+
+
+def test_local_plan_tells_masked_tabs_apart_by_url_and_files_them_by_the_real_title():
+    ecfg = dataclasses.replace(ECFG, workspaces=(episodes.WorkspaceRule('仕事', (), re.compile('請求', re.I)),))
+    g, tl = analysed()
+    tabs = [Tab(1, 'https://mail.google.com/mail/u/0/?th=2', '請求書の件'),
+            Tab(2, 'https://mail.google.com/mail/u/1/', 'ほかのメール')]
+    site_view = plan.classify(tabs, g, tl, LCFG, ecfg, PRIVACY, now_us=at(60))
+    assert [(p.title, p.status, p.workspace) for p in site_view] == [('メール', 'keep', None), ('メール', 'dup', None)]
+    local = plan.classify(tabs, g, tl, LCFG, ecfg, PRIVACY, now_us=at(60), local=True)
+    assert [(p.title, p.status, p.workspace) for p in local] == [('メール', 'keep', '仕事'), ('メール', 'keep', None)]

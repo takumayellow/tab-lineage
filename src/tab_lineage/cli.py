@@ -94,7 +94,8 @@ def cmd_arrange(a) -> None:
     acfg = arrange.ArrangeConfig.from_config(r.cfg)
     placed = plan.classify(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
                            labels=config.load_labels(a.labels),
-                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy), visits=r.visits)
+                           anchored=plan.anchor_labels(r.visits, acfg.anchors, r.privacy), visits=r.visits,
+                           local=True)
     arr = arrange.build(placed, acfg)
     print(arrange.outline(arr))
     if a.out:

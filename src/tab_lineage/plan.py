@@ -139,11 +139,14 @@ class Placed:
 
 def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg: EpisodeConfig,
              privacy: Privacy, now_us: int, stash_days: float = STASH_DAYS, labels: dict | None = None,
-             anchored: dict[str, str] | None = None, visits: list[Visit] | None = None) -> list[Placed]:
+             anchored: dict[str, str] | None = None, visits: list[Visit] | None = None,
+             local: bool = False) -> list[Placed]:
     """labels は labels.toml を読んだもの. 名前を付けたスレッドはその名前を goal にする.
     anchored は anchor_labels の結果. 当たったタブはスレッドより先にその名前を goal にする.
     visits を渡すと, 節の URL に当たらないタブ (同じサイトの中でたどって畳まれたページ) も,
-    同じ URL の最後の訪問をまとめた節から流れを引く."""
+    同じ URL の最後の訪問をまとめた節から流れを引く.
+    local は自分のブラウザへ戻す案 (arrange) のとき. 伏せるページも, 重複は URL で見分け,
+    ワークスペースの規則は本当の題名に当てる (サイトに載せる案では題名が見えないので host でまとめる)."""
     last_seen: dict[str, int] = {}
     node_of: dict[str, int] = {}
     for i, n in g.nodes.items():
@@ -166,7 +169,7 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
         # 伏せたタブは lineage と同じく host の URL で節を引く
         url = clean_url(f'{tab.url.split("://", 1)[0]}://{host}/') if masked else clean_url(tab.url, privacy.keep_query)
         title = masked[0] if masked else (clean_title(scrub_title(tab.title)) or host)
-        key = f'{host}\n{title}' if masked else page_key(tab.url)
+        key = f'{host}\n{title}' if masked and not local else page_key(tab.url)
         if key in first_of:
             status = 'dup'
         elif lcfg.is_search(tab.url):
@@ -179,7 +182,8 @@ def classify(tabs: list[Tab], g: Graph, tl: Timeline, lcfg: LineageConfig, ecfg:
         nid = node_of.get(url, folded.get(url, -1))
         goal = (None if masked else (anchored or {}).get(page_key(tab.url))) or goals.get(nid) or host
         # URL と題名の規則に当たらないタブは, 開いた流れ (スレッド, 無ければ回) のワークスペースに入れる
-        workspace = ecfg.workspace_of(tab.url, title) or spaces.get(nid)
+        own = ecfg.workspace_of(tab.url, clean_title(scrub_title(tab.title)) if masked and local else title)
+        workspace = own or spaces.get(nid)
         out.append(Placed(tab, title, status, workspace, goal, first))
     return out
 

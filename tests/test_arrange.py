@@ -335,3 +335,35 @@ def test_a_workspace_written_twice_is_ordered_where_it_first_appears():
     a = arrange.ArrangeConfig.from_config({'workspace': [{'name': '大学'}, {'name': '開発', 'match': ['x.example/*']},
                                                          {'name': '学習'}, {'name': '開発', 'match': ['*']}]})
     assert a.order == ('大学', '開発', '学習')
+
+
+def test_topics_name_stacks_from_the_title_or_the_decoded_url():
+    cfg = arrange.ArrangeConfig.from_config(config._merge(CFG, {'arrange': {'topic': [
+        {'title': r'atcoder\.jp/contests/abc(\d+)', 'name': 'ABC{0}'},
+        {'title': '(情報工学実験)'},
+        {'title': 'ｆｏｕｒｉｅｒ|フーリエ'}]}}))
+    ps = [placed(0, 'https://atcoder.jp/contests/abc479/tasks/abc479_d', 'D - Back', goal='x'),
+          placed(1, 'https://atcoder.jp/contests/ABC479/submissions/1', '提出', goal='y'),
+          placed(2, 'https://example.com/%E6%83%85%E5%A0%B1%E5%B7%A5%E5%AD%A6%E5%AE%9F%E9%A8%93/a', 'a', goal='z'),
+          placed(3, 'https://example.com/b', '情報工学実験2 のコード', goal='w'),
+          placed(4, 'https://example.com/c', 'フーリエ変換', goal='v'),
+          placed(5, 'https://example.com/d', 'ほか', goal='v')]
+    assert cfg.topic_of('https://example.com/', 'Fourier') is None   # 全角の字は NFKC してから名前にするだけ
+    items = arrange.build(ps, cfg)['workspaces'][0]['items']
+    assert [(i['stack'], len(i['tabs'])) for i in items] == [('ABC479', 2), ('情報工学実験', 2), (None, 1), (None, 1)]
+    assert {i['tabs'][0][0] for i in items if not i['stack']} == {'フーリエ変換', 'ほか'}
+
+
+def test_topic_name_is_normalized_with_nfkc():
+    t = arrange.Topic(re.compile(r'(ＡＢＣ\d+)'), None)
+    assert t.label('https://x.example/', 'ＡＢＣ１２') == 'ABC12'
+    assert arrange.Topic(re.compile('nothing'), None).label('https://x.example/', 't') is None
+
+
+def test_close_title_sends_error_pages_to_close():
+    cfg = arrange.ArrangeConfig.from_config(config._merge(CFG, {'arrange': {'close_title': r'^(404|エラー)( |$|\|)'}}))
+    ps = [placed(0, 'https://a.example/x', '404 | site'), placed(1, 'https://a.example/y', 'エラー | ITC', status='stash'),
+          placed(2, 'https://a.example/z', '4040 の話')]
+    arr = arrange.build(ps, cfg)
+    assert [(c['title'], c['why']) for c in arr['close']] == [('404 | site', 'エラーのページ'), ('エラー | ITC', 'エラーのページ')]
+    assert arr['workspaces'][0]['items'][0]['tabs'] == [['4040 の話', 'https://a.example/z']]
