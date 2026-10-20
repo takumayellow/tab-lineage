@@ -48,6 +48,15 @@ def test_payload_and_render_round_trip():
     assert '{{DATA}}' not in page and '/*{{JS}}*/' not in page
 
 
+def test_payload_keeps_only_http_links_to_other_sites():
+    g, tl = analysed()
+    cfg = config._merge(CFG, {'site': {'link': [{'label': 'chronofit', 'url': 'http://127.0.0.1:27615/'},
+                                                {'label': 'x', 'url': 'javascript:alert(1)'}, {'label': '', 'url': 'https://a/'},
+                                                {'url': 'https://b/'}]}})
+    assert site.payload(g, tl, cfg)['meta']['links'] == [{'label': 'chronofit', 'url': 'http://127.0.0.1:27615/'}]
+    assert site.payload(g, tl, CFG)['meta']['links'] == []
+
+
 def test_render_escapes_title_and_does_not_expand_markers_in_data():
     g, tl = analysed()
     cfg = config._merge(CFG, {'site': {'title': '<b>Tabs</b> & /*{{JS}}*/'}})

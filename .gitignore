@@ -24,3 +24,6 @@ arrange*.json
 !site/index.html
 _site/
 *.before-*.json
+# ブックマークの控えと消したものの記録 (--state を repo の中に向けたとき)
+bookmarks/
+dropped.jsonl

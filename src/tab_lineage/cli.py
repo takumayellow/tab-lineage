@@ -147,10 +147,42 @@ def refile_plan(links: list[dict], config_path: str | None, state: pathlib.Path 
 
 
 def move_bookmarks(port: int, root: str, moves: list[dict], profile: pathlib.Path, state: pathlib.Path) -> dict:
-    """ブックマークのファイルの控えを取ってから移す. 控えを取れなければ移さない (OSError)."""
+    """ブックマークのファイルの控えを取ってから, 移す・題名を付け直す・消す. 控えを取れなければ何もしない (OSError).
+    消したものは state/bookmarks/dropped.jsonl に残し, 利用者がまた入れたら消さないよう覚える.
+    消す前に覚えておくので, 途中で失敗しても消したものはまた消さない. 失敗したら消したかもしれないものを記録に残す."""
     from . import vivaldi
     snapshot.backup_bookmarks(profile, state / 'bookmarks')
-    return vivaldi.move(port, root, moves)
+    planned = [m for m in moves if m.get('drop')]
+    if planned:
+        judge.mark_dropped(state, [m['url'] for m in planned])
+    try:
+        res = vivaldi.move(port, root, moves)
+    except Exception:
+        record_dropped(state, root, planned, planned, unsure=True)
+        raise
+    record_dropped(state, root, moves, res.get('removed') or [])
+    return res
+
+
+def record_dropped(state: pathlib.Path, root: str, moves: list[dict], removed: list[dict], unsure: bool = False) -> None:
+    """消したリンク (unsure なら, 途中で失敗して消したかもしれないリンク) を dropped.jsonl に足す."""
+    if not removed:
+        return
+    where = {m['id']: m['from'] for m in moves}
+    at = time.strftime('%Y-%m-%dT%H:%M:%S')
+    with open(state / 'bookmarks' / 'dropped.jsonl', 'a', encoding='utf-8') as f:
+        for r in removed:
+            rec = {'at': at, 'title': r['title'], 'url': r['url'], 'path': [root, *where.get(r['id'], [])]}
+            f.write(json.dumps({**rec, 'unsure': True} if unsure else rec, ensure_ascii=False) + '\n')
+
+
+def describe(root: str, m: dict) -> str:
+    """refile ですること 1 件の表示."""
+    here = '/'.join([root, *m['from']])
+    if m.get('drop'):
+        return f'消す ({here}): {m["title"]}'
+    out = f'{here} -> {"/".join([root, *m["path"]])}: {m["title"]}' if m.get('path') is not None else f'{here}: {m["title"]}'
+    return out + (f' => 題名を「{m["rename"]}」に' if m.get('rename') else '')
 
 
 def cmd_refile(a) -> None:
@@ -163,13 +195,15 @@ def cmd_refile(a) -> None:
     if line:
         print(line, file=sys.stderr)
     for m in moves:
-        print(f'{"/".join([acfg.reading_root, *m["from"]])} -> {"/".join([acfg.reading_root, *m["path"]])}: {m["title"]}')
+        print(describe(acfg.reading_root, m))
     if a.dry_run or not moves:
-        print(f'振り分ける {len(moves)} 件 (動かさない {len(links) - len(moves)} 件)')
+        drop = sum(1 for m in moves if m.get('drop'))
+        print(f'振り分ける・直す {len(moves) - drop} 件, 消す {drop} 件 (触らない {len(links) - len(moves)} 件)')
         return
     profile = pathlib.Path(a.profile_dir) if a.profile_dir else snapshot.default_profile(a.browser, a.profile)
     res = move_bookmarks(a.port, acfg.reading_root, moves, profile, state)
-    print(f'振り分けた {res["moved"]} 件 (動かさなかった {len(links) - res["moved"]} 件)')
+    print(f'振り分けた {res["moved"]} 件, 題名を直した {res.get("renamed", 0)} 件, 消した {len(res.get("removed") or [])} 件 '
+          f'(触らなかった {len(links) - len(moves) + len(res.get("skipped") or [])} 件)')
     for s in res['skipped']:
         print(f'移さなかった: {s}')
 
