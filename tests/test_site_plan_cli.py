@@ -66,6 +66,13 @@ def test_render_escapes_title_and_does_not_expand_markers_in_data():
     assert embedded(page)['meta']['title'] == '<b>Tabs</b> & /*{{JS}}*/'
 
 
+def test_render_declares_utf8_in_the_page():
+    # サーバーの Content-Type に頼ると, charset 無しで覚えたキャッシュを 304 で使い回すブラウザが Shift_JIS と読む
+    g, tl = analysed()
+    page = site.render(site.payload(g, tl, CFG))
+    assert page.startswith('<meta charset="utf-8">')
+
+
 def test_labels_rename_and_hide():
     g, tl = analysed()
     ep_id = tl.episodes[0].id
