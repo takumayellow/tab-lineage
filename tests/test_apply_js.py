@@ -224,7 +224,7 @@ def test_dirty_tells_what_a_person_typed_from_what_the_page_set(tmp_path):
     ws = None
     try:
         active = profile / 'DevToolsActivePort'
-        port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+        port = wait_for(lambda: devtools_port(active))
         target = wait_for(lambda: next((p for p in vivaldi._pages(port) if p.get('url') == page.as_uri()), None))
         ws = websocket.create_connection(target['webSocketDebuggerUrl'], timeout=10, suppress_origin=True)
         n = iter(range(1, 1000))
@@ -260,9 +260,9 @@ def test_dirty_tells_what_a_person_typed_from_what_the_page_set(tmp_path):
         js(reset + " window.onbeforeunload = null; document.body.insertAdjacentHTML('beforeend',"
            " '<select id=s2><option>x</option><option>y</option></select>'); document.getElementById('s2').selectedIndex = 1;")
         got['used, page set choice'] = js(vivaldi.DIRTY)   # 操作したページでは, 裏で値を合わせた欄か見分けられない
-        js('setTimeout(() => location.reload(), 0)')
-        wait_for(lambda: js("performance.getEntriesByType('navigation')[0].type === 'reload'"
-                            " && document.readyState === 'complete'") or None)
+        js('window.__old = true')    # 開き直した後の文書には無い印
+        send('Page.reload')
+        wait_for(lambda: js("window.__old === undefined && document.readyState === 'complete'") or None)
         js("document.getElementById('s').selectedIndex = 1; document.getElementById('c').checked = true;")
         got['reloaded choice'] = js(vivaldi.DIRTY)   # 開き直したページでは前に選んだ答えが印なしで戻る
     finally:
@@ -279,6 +279,14 @@ def test_dirty_tells_what_a_person_typed_from_what_the_page_set(tmp_path):
 TOP = '<!doctype html><meta charset="utf-8"><body><iframe src="http://127.0.0.1:%d/%s"></iframe>'
 INNER = {'typed.html': '<input id=e value=a><script>const e = document.getElementById("e"); e.value = "z"; e.focus();</script>',
          'clean.html': '<input id=e value=a>'}
+
+
+def devtools_port(active):
+    """Chrome が書き終えた DevToolsActivePort のポート. 書きかけ・書き込み中 (Windows では読めない) は None."""
+    try:
+        return int(active.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def wait_for(check, tries=60):
@@ -319,7 +327,7 @@ def test_form_state_finds_input_in_a_frame_the_page_cannot_read(tmp_path):
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             active = profile / 'DevToolsActivePort'
-            port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+            port = wait_for(lambda: devtools_port(active))
             urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/json/new?{clean}', method='PUT'),
                                    timeout=10).close()
 
@@ -357,7 +365,7 @@ def test_dirty_reads_the_pdf_viewer_state_instead_of_its_toolbar(tmp_path):
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         active = profile / 'DevToolsActivePort'
-        port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+        port = wait_for(lambda: devtools_port(active))
         urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/json/new?{pdf.as_uri()}',
                                                       method='PUT'), timeout=10).close()
         origin = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai'   # vivaldi.DIRTY の PDF ビューアと同じ

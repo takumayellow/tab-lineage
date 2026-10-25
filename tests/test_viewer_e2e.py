@@ -89,3 +89,10 @@ def test_tabs_and_rules_render(page):
 
 def test_unknown_episode_says_so(page):
     assert 'その回はありません' in text(render(page, '#/ep/no-such-id'))
+
+
+def test_time_link_opens_the_episode_that_contains_it(page):
+    import datetime as dt
+    minute = dt.datetime.fromtimestamp(1_790_000_010).strftime('%Y-%m-%dT%H:%M')   # T0 の 10 秒後 (現地時刻)
+    assert '検索「pandas」' in text(render(page, f'#/at/{minute}'))
+    assert 'その時刻の回はありません' in text(render(page, '#/at/2001-01-01T00:00'))

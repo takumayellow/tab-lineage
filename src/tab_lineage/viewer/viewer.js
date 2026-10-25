@@ -477,6 +477,25 @@
     return [h, s, footer()];
   }
 
+  // ほかの道具から「この時刻の回」へ飛ぶ (#/at/2026-04-06T09:00 は見ている端末の現地時刻)
+  const AT_SLACK_S = 30 * 60;
+  function episodeAt(text) {
+    const t = Date.parse(text) / 1000;
+    if (!Number.isFinite(t)) return null;
+    let best = null, bestGap = Infinity;
+    EPS.forEach((e) => {
+      const gap = t < e.t0 ? e.t0 - t : t > e.t1 ? t - e.t1 : 0;
+      if (gap < bestGap) { best = e; bestGap = gap; }
+    });
+    return bestGap <= AT_SLACK_S ? best : null;
+  }
+  function viewAt(text) {
+    const e = episodeAt(text);
+    if (!e) return [head('見つかりません', 'その時刻の回はありません', null), link('#/list', null, '回の一覧へ')];
+    history.replaceState(null, '', `#/ep/${encodeURIComponent(e.id)}`);
+    return viewEpisode(e.id);
+  }
+
   function viewMissing() {
     return [head('見つかりません', 'その回はありません', null), link('#/list', null, '回の一覧へ')];
   }
@@ -493,6 +512,7 @@
     const [, name = '', arg = ''] = hash.split('/');
     let nodes, key;
     if (name === 'ep') { nodes = viewEpisode(decodeURIComponent(arg)); key = 'list'; }
+    else if (name === 'at') { nodes = viewAt(decodeURIComponent(arg)); key = 'list'; }
     else if (name === 'list') { nodes = viewList(); key = 'list'; }
     else if (name === 'tabs') { nodes = viewTabs(); key = 'tabs'; }
     else if (name === 'rules') { nodes = viewRules(); key = 'rules'; }
