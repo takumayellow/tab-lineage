@@ -260,9 +260,9 @@ def test_dirty_tells_what_a_person_typed_from_what_the_page_set(tmp_path):
         js(reset + " window.onbeforeunload = null; document.body.insertAdjacentHTML('beforeend',"
            " '<select id=s2><option>x</option><option>y</option></select>'); document.getElementById('s2').selectedIndex = 1;")
         got['used, page set choice'] = js(vivaldi.DIRTY)   # 操作したページでは, 裏で値を合わせた欄か見分けられない
-        js('setTimeout(() => location.reload(), 0)')
-        wait_for(lambda: js("performance.getEntriesByType('navigation')[0].type === 'reload'"
-                            " && document.readyState === 'complete'") or None)
+        js('window.__old = true')    # 開き直した後の文書には無い印
+        send('Page.reload')
+        wait_for(lambda: js("window.__old === undefined && document.readyState === 'complete'") or None)
         js("document.getElementById('s').selectedIndex = 1; document.getElementById('c').checked = true;")
         got['reloaded choice'] = js(vivaldi.DIRTY)   # 開き直したページでは前に選んだ答えが印なしで戻る
     finally:
