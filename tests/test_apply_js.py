@@ -224,7 +224,7 @@ def test_dirty_tells_what_a_person_typed_from_what_the_page_set(tmp_path):
     ws = None
     try:
         active = profile / 'DevToolsActivePort'
-        port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+        port = wait_for(lambda: devtools_port(active))
         target = wait_for(lambda: next((p for p in vivaldi._pages(port) if p.get('url') == page.as_uri()), None))
         ws = websocket.create_connection(target['webSocketDebuggerUrl'], timeout=10, suppress_origin=True)
         n = iter(range(1, 1000))
@@ -281,6 +281,14 @@ INNER = {'typed.html': '<input id=e value=a><script>const e = document.getElemen
          'clean.html': '<input id=e value=a>'}
 
 
+def devtools_port(active):
+    """Chrome が書き終えた DevToolsActivePort のポート. 書きかけ・書き込み中 (Windows では読めない) は None."""
+    try:
+        return int(active.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def wait_for(check, tries=60):
     for _ in range(tries):
         if (got := check()) is not None:
@@ -319,7 +327,7 @@ def test_form_state_finds_input_in_a_frame_the_page_cannot_read(tmp_path):
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             active = profile / 'DevToolsActivePort'
-            port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+            port = wait_for(lambda: devtools_port(active))
             urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/json/new?{clean}', method='PUT'),
                                    timeout=10).close()
 
@@ -357,7 +365,7 @@ def test_dirty_reads_the_pdf_viewer_state_instead_of_its_toolbar(tmp_path):
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         active = profile / 'DevToolsActivePort'
-        port = wait_for(lambda: int(active.read_text().split()[0]) if active.exists() else None)
+        port = wait_for(lambda: devtools_port(active))
         urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/json/new?{pdf.as_uri()}',
                                                       method='PUT'), timeout=10).close()
         origin = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai'   # vivaldi.DIRTY の PDF ビューアと同じ
