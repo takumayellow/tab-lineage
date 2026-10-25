@@ -8,7 +8,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from . import arrange, config, episodes, histdb, judge, lineage, plan, session, site, snapshot
+from . import arrange, cases, config, episodes, histdb, judge, lineage, plan, session, site, snapshot
 from .privacy import Privacy
 
 
@@ -79,6 +79,8 @@ def cmd_build(a) -> None:
     elif a.session:
         tab_plan = plan.build(session.load(a.session), r.graph, r.timeline, r.lcfg, r.ecfg, r.privacy, r.last_visit,
                               labels=labels)
+    if a.cases:
+        labels = cases.attach(labels, r.timeline, cases.load(a.cases))
     data = site.payload(r.graph, r.timeline, r.cfg, labels, tab_plan)
     out = pathlib.Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -307,6 +309,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument('--session', help='今のタブの整理案を作るセッションファイル')
     p.add_argument('--plan', help='手で作った整理案の JSON (--session より優先)')
     p.add_argument('--json', help='埋め込んだデータを JSON でも書き出す')
+    p.add_argument('--cases', help='ほかの道具が選んだ事例の JSON (その時刻を含む回を読みものにする)')
     p.set_defaults(func=cmd_build)
 
     p = sub.add_parser('arrange', help='今のタブをワークスペース・スタック・ブックマークへ並べ直す案を作る')
