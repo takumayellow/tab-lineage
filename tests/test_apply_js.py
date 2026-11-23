@@ -43,6 +43,33 @@ globalThis.chrome = {
 };
 '''
 
+# Vivaldi 8.3 から: tabs.update / tabs.create の vivExtData の中の workspaceId は無視され, tabs.update は最上位の
+# workspaceId を知らない. 所属は tabs.create の最上位の workspaceId か, tabsPrivate.move の workspaceId で付く
+# move の所属は少し遅れて vivExtData に出る
+FAKE_83 = FAKE.replace(
+    "tabsPrivate: {move: async () => ({group: 'g'}),",
+    "tabsPrivate: {move: async p => { if ((p.tweaks || []).includes('target-is-tab'))"
+    " throw new Error(\"Error at parameter 'moveProperties': Error at property 'tweaks': Error at index 0: Value must be one of on.\");"
+    " if (p.workspaceId !== undefined) setTimeout(() => p.tabIds.forEach(id => setWs(id, p.workspaceId)), 150);"
+    " return {group: 'g', success: true}; },",
+).replace(
+    "update: async (id, p) => { Object.assign(tabs.get(id), p); },",
+    "update: async (id, p) => { if ('workspaceId' in p) throw new Error(\"Unexpected property: 'workspaceId'.\");"
+    " const {vivExtData, ...rest} = p; Object.assign(tabs.get(id), rest);"
+    " if (vivExtData !== undefined) { const ws = wsOf(tabs.get(id)); tabs.get(id).vivExtData = JSON.stringify({...JSON.parse(vivExtData), workspaceId: ws}); } },",
+).replace(
+    "create: async p => { log.created.push(p.url); const t = {id: 100 + log.created.length, ...p}; tabs.set(t.id, t); return t; },",
+    "create: async p => { log.created.push(p.url); const {workspaceId, vivExtData, ...rest} = p;"
+    " const t = {id: 100 + log.created.length, ...rest, vivExtData: JSON.stringify(workspaceId === undefined ? {} : {workspaceId})};"
+    " tabs.set(t.id, t); return {...t}; },",
+) + r'''
+function wsOf(t) { return JSON.parse(t.vivExtData || '{}').workspaceId; }
+function setWs(id, ws) { const t = tabs.get(id); t.vivExtData = JSON.stringify({...JSON.parse(t.vivExtData || '{}'), workspaceId: ws}); }
+log.final = () => Object.fromEntries([...tabs.values()].map(t => [t.id, wsOf(t) ?? null]));
+'''
+
+assert FAKE_83.count('setWs(') >= 2 and 'Unexpected property' in FAKE_83 and 'const {workspaceId, vivExtData, ...rest}' in FAKE_83
+
 OLD = 1_000   # ずっと前に見たタブの lastAccessed (ミリ秒). 'now' は今見たタブ, None は見た時刻が無いタブ
 
 
@@ -65,14 +92,15 @@ ARR = {'workspaces': [{'name': 'A', 'items': [{'stack': None, 'tabs': [
        'close': [{'url': u} for u in ['https://form.example/', 'https://frozen-search.example/', 'https://search.example/']]}
 
 
-def run(recent_ms: int = 0, tabs: list[dict] = TABS, arr: dict = ARR, focused: int = 1, stale_ms: int = 0) -> dict:
+def run(recent_ms: int = 0, tabs: list[dict] = TABS, arr: dict = ARR, focused: int = 1, stale_ms: int = 0,
+        fake: str = FAKE) -> dict:
     expr = vivaldi.expression(arr, settle_ms=0, close=True, quiet=True, keep=['https://form.example/'],
                               unsure=['https://frozen.example/', 'https://frozen-search.example/'], recent_ms=recent_ms,
                               stale_ms=stale_ms)
     src = (f'const TABS = {json.dumps(tabs)};\nconst FOCUSED = {focused};\n'
            'TABS.forEach(t => { if (t.lastAccessed === "now") t.lastAccessed = Date.now() - 1000;'
            ' else if (t.lastAccessed === null) delete t.lastAccessed; });\n'
-           f'{FAKE}\n{expr}.then(r => console.log(JSON.stringify({{r, log}})));')
+           f'{fake}\n{expr}.then(r => {{ if (log.final) log.final = log.final(); console.log(JSON.stringify({{r, log}})); }});')
     out = subprocess.run([NODE, '-'], input=src, capture_output=True, text=True, encoding='utf-8', timeout=30)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
@@ -100,6 +128,36 @@ def test_apply_while_active_spares_recent_tabs_and_tabs_without_an_access_time()
     left = {u for _, u in busy['left']}
     assert {'https://recent.example/', 'https://noaccess.example/'} <= left
     assert busy['adopted'] == plain['adopted'] == 2   # ずっと前に見たタブは操作中でも移す
+
+
+MOVES = [tab(1, 'https://shown.example/', active=True), tab(2, 'https://elsewhere.example/'),
+         tab(3, 'https://unrelated.example/')]
+MOVE_ARR = {'workspaces': [{'name': 'A', 'items': [
+    {'stack': None, 'tabs': [['moved', 'https://elsewhere.example/'], ['new', 'https://new.example/']]}]}]}
+
+
+@pytest.mark.skipif(NODE is None, reason='node が見つからない')
+def test_apply_puts_moved_and_new_tabs_into_the_workspace_on_vivaldi_8_3():
+    got = run(tabs=MOVES, arr=MOVE_ARR, fake=FAKE_83)
+    log, r = got['log'], got['r']
+    assert r['failed'] == []
+    assert r['adopted'] == 1 and r['made'] == 1
+    final = log['final']
+    assert final['2'] == 1   # 別のワークスペース (9) から引き取ったタブはワークスペース A (1) に入る
+    assert final['101'] == 1   # 新しく作ったタブも A に入る
+    assert final['3'] == 9   # 案に無いタブの所属は変えない
+
+
+STACK_ARR = {'workspaces': [{'name': 'A', 'items': [
+    {'stack': 'S', 'tabs': [['moved', 'https://elsewhere.example/'], ['new', 'https://new.example/']]}]}]}
+
+
+@pytest.mark.skipif(NODE is None, reason='node が見つからない')
+def test_apply_stacks_without_the_tweak_vivaldi_8_3_dropped():
+    got = run(tabs=MOVES, arr=STACK_ARR, fake=FAKE_83)
+    r, final = got['r'], got['log']['final']
+    assert r['failed'] == [] and r['stacks'] == 1
+    assert final['2'] == 1 and final['101'] == 1
 
 
 # ウィンドウ 1: 最後に使ったが 1 枚だけ. ウィンドウ 2: 一番多い. ウィンドウ 3〜5, 7: 選ばれているタブ 1 枚ずつ. ウィンドウ 6: 2 枚
