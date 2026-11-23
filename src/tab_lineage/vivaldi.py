@@ -76,9 +76,47 @@ JS = r'''
   for (const t of before) counts.set(t.windowId, (counts.get(t.windowId) || 0) + 1);
   const largest = [...counts].sort((a, b) => b[1] - a[1] || (b[0] === focused.id) - (a[0] === focused.id) || a[0] - b[0])[0];
   const win = opts.quiet && largest ? {id: largest[0]} : focused;
-  const setWorkspace = async (tabId, wsId) => {
-    const ext = JSON.parse((await chrome.tabs.get(tabId)).vivExtData || '{}');
-    if (ext.workspaceId !== wsId) await chrome.tabs.update(tabId, {vivExtData: JSON.stringify({...ext, workspaceId: wsId})});
+  // 所属は画面と同じ tabsPrivate.move に workspaceId を渡して付ける (タブの無いワークスペースへも付く).
+  // Vivaldi 8.3 から tabs.update の vivExtData の中の workspaceId は無視され, どのワークスペースにも属さない
+  // タブになる (そのワークスペースを表示しているウィンドウのタブバーに出ない). 付いたかは読み返して確かめる
+  const wsOfTab = async tabId => extOf(await chrome.tabs.get(tabId)).workspaceId;
+  const strays = async (tabIds, wsId) => {
+    const out = [];
+    for (const id of tabIds) if (await wsOfTab(id) !== wsId) out.push(id);
+    return out;
+  };
+  const setWorkspace = async (tabIds, wsId) => {
+    let lost = await strays([].concat(tabIds), wsId);
+    if (!lost.length) return;
+    let r;
+    try { r = await vivaldi.tabsPrivate.move({tabIds: lost, target: 'last', windowId: win.id, tweaks: ['do-not-reparent'], workspaceId: wsId}); }
+    catch (e) { r = {success: false, message: String(e?.message || e)}; }
+    // move の所属は少し遅れて vivExtData に出る. すぐ読むと付いていないように見え, そこで vivExtData を書くと
+    // 古い vivExtData で move の所属を上書きして消してしまう. 出るまで待ってから, それでも無いときだけ書く
+    for (let i = 0; i < 20 && (lost = await strays(lost, wsId)).length; i++) await new Promise(res => setTimeout(res, 100));
+    // move で付けられない古い版は vivExtData で付ける
+    if (lost.length) {
+      for (const id of lost) {
+        const ext = extOf(await chrome.tabs.get(id));
+        await chrome.tabs.update(id, {vivExtData: JSON.stringify({...ext, workspaceId: wsId})});
+      }
+      lost = await strays(lost, wsId);
+    }
+    if (lost.length) throw new Error(`ワークスペースに入らない (${lost.length} 枚${r?.message ? ': ' + r.message : ''})`);
+  };
+  // 新しいタブは tabs.create の最上位の workspaceId で作る. この名前を知らない古い版は未知のプロパティとして
+  // 例外を投げるので, そのときだけ vivExtData で渡す. どちらでも, 作ったあとに setWorkspace で確かめる
+  let viaExtData = false;
+  const create = async (url, wsId) => {
+    const base = {windowId: win.id, url, active: false};
+    if (!viaExtData) {
+      try { return await chrome.tabs.create({...base, workspaceId: wsId}); }
+      catch (e) {
+        if (!/unexpected property.*workspaceId/i.test(String(e?.message || e))) throw e;
+        viaExtData = true;
+      }
+    }
+    return chrome.tabs.create({...base, vivExtData: JSON.stringify({workspaceId: wsId})});
   };
   // 適用先のウィンドウにあるタブを元のスタックから外して末尾へ置く. 残すと新しいスタックが元のスタックの続きになる.
   // vivExtData の group を消しても外れないので, 画面の「スタックから外す」と同じ move を使う
@@ -121,8 +159,10 @@ JS = r'''
     let t = take(url, wsId);
     if (!t && pinned.has(url)) { kept++; return null; }
     if (!t) {
+      t = await create(url, wsId);
+      await setWorkspace(t.id, wsId);
       opened++;
-      return chrome.tabs.create({windowId: win.id, url, active: false, vivExtData: JSON.stringify({workspaceId: wsId})});
+      return t;
     }
     if (t.windowId === win.id && t.ext.workspaceId === wsId) { already++; return t; }
     await chrome.tabs.move(t.id, {windowId: win.id, index: -1});
@@ -131,6 +171,7 @@ JS = r'''
     adopted++;
     return t;
   };
+  let targetIsTab = true;
   const stack = async (tabs, wsId, title) => {
     const exts = await Promise.all(tabs.map(async t => extOf(await chrome.tabs.get(t.id))));
     if (new Set(exts.map(x => x.group)).size === 1 && exts[0].group) {
@@ -142,13 +183,24 @@ JS = r'''
     }
     // 元の場所のままのタブが前のスタックに入っていると, 新しいスタックがその続きになる
     for (const t of tabs) await unstack(t.id);
-    const move = extra => vivaldi.tabsPrivate.move({tabIds: tabs.slice(1).map(t => t.id), target: exts[0].ext_id,
-      windowId: win.id, ...extra, tweaks: ['target-is-tab', 'do-not-reparent', 'on', 'create-group']});
+    // target-is-tab は Vivaldi 8.3 で無くなり, 渡すと tweaks の値の例外になる. 画面も target にタブの ext_id を渡して
+    // do-not-reparent, on, create-group だけで作る. 古い版のために, 例外になったときだけ外す
+    const move = async extra => {
+      const p = {tabIds: tabs.slice(1).map(t => t.id), target: exts[0].ext_id, windowId: win.id, ...extra};
+      const base = ['do-not-reparent', 'on', 'create-group'];
+      if (!targetIsTab) return vivaldi.tabsPrivate.move({...p, tweaks: base});
+      try { return await vivaldi.tabsPrivate.move({...p, tweaks: ['target-is-tab', ...base]}); }
+      catch (e) {
+        if (!/property 'tweaks'/.test(String(e?.message || e)) || /target-is-tab/.test(String(e?.message || e))) throw e;
+        targetIsTab = false;
+        return vivaldi.tabsPrivate.move({...p, tweaks: base});
+      }
+    };
     let r = await move({workspaceId: wsId});
     if (!r?.group) {
       // workspaceId を渡すと ambiguous windowId で断られるウィンドウがある. 渡さないと外れるタブがあるので付け直す
       r = await move({});
-      for (const t of tabs) await setWorkspace(t.id, wsId);
+      await setWorkspace(tabs.map(t => t.id), wsId);
     }
     if (!r?.group) throw new Error(r?.message ?? 'スタックを作れない');
     await vivaldi.tabsPrivate.setGroupProperties({groupExtId: r.group, groupTitle: title});
